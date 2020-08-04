@@ -31,7 +31,7 @@ fn main() {
             )})
         .filter(Some("fuse_mt"), LevelFilter::Warn)
         .filter(Some("fuse"), LevelFilter::Warn)
-        .filter(None, LevelFilter::Debug)
+        .filter(None, LevelFilter::Warn)
         .init();
 
     let args: Vec<OsString> = env::args_os().collect();
