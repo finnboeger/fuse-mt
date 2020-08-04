@@ -7,6 +7,10 @@
 
 use std::env;
 use std::ffi::{OsStr, OsString};
+use chrono::Local;
+use env_logger::Builder;
+use log::LevelFilter;
+use std::io::Write;
 
 #[macro_use]
 extern crate log;
@@ -15,25 +19,20 @@ mod libc_extras;
 mod libc_wrappers;
 mod passthrough;
 
-struct ConsoleLogger;
-
-impl log::Log for ConsoleLogger {
-    fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record<'_>) {
-        println!("{}: {}: {}", record.target(), record.level(), record.args());
-    }
-
-    fn flush(&self) {}
-}
-
-static LOGGER: ConsoleLogger = ConsoleLogger;
-
 fn main() {
-    log::set_logger(&LOGGER).unwrap();
-    log::set_max_level(log::LevelFilter::Debug);
+    Builder::new()
+        .format(|buf, record| {
+            writeln!(buf,
+                     "{} [{}]: {}: {}",
+                     Local::now().format("%Y-%m-%dT%H:%M:%S"),
+                     record.level(),
+                     record.target(),
+                     record.args()
+            )})
+        .filter(Some("fuse_mt"), LevelFilter::Warn)
+        .filter(Some("fuse"), LevelFilter::Warn)
+        .filter(None, LevelFilter::Debug)
+        .init();
 
     let args: Vec<OsString> = env::args_os().collect();
 
