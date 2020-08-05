@@ -93,6 +93,7 @@ impl PassthroughFS {
     }
 
     fn stat_real(&self, path: &Path) -> io::Result<FileAttr> {
+        // TODO: use cache
         let real: OsString = self.real_path(path);
         debug!("stat_real: {:?}", real);
 
@@ -122,6 +123,7 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn getattr(&self, _req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
+        // TODO: use cache
         debug!("getattr: {:?}", path);
 
         if let Some(fh) = fh {
@@ -138,6 +140,7 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn opendir(&self, _req: RequestInfo, path: &Path, _flags: u32) -> ResultOpen {
+        // TODO: use cache
         let real = self.real_path(path);
         debug!("opendir: {:?} (flags = {:#o})", real, _flags);
         match libc_wrappers::opendir(real) {
@@ -156,6 +159,7 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn readdir(&self, _req: RequestInfo, path: &Path, fh: u64) -> ResultReaddir {
+        // TODO: use cache
         debug!("readdir: {:?}", path);
         let mut entries: Vec<DirectoryEntry> = vec![];
 
