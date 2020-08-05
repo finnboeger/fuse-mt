@@ -18,6 +18,7 @@ extern crate log;
 mod libc_extras;
 mod libc_wrappers;
 mod passthrough;
+mod cache;
 
 fn main() {
     Builder::new()
@@ -56,7 +57,8 @@ fn main() {
                 .required(true)))
         .subcommand(SubCommand::with_name("build")
             .about("Creates the cache to be used")
-            .arg(Arg::with_name("ROOT_DIR")
+            .arg(Arg::with_name("root")
+                .value_name("ROOT_DIR")
                 .required(true)
                 .help("set root directory from which the cache will be created."))
             .arg(Arg::with_name("output")
@@ -83,7 +85,7 @@ fn main() {
             fuse_mt::mount(fuse_mt::FuseMT::new(filesystem, 1), &mount_point, &fuse_args).unwrap();
         },
         ("build", Some(sub_matches)) => {
-            // TODO: build cache
+            cache::build(sub_matches.value_of("root").unwrap());
         },
         _ => {}
     }
