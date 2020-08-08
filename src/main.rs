@@ -16,6 +16,7 @@ use std::io::Write;
 extern crate log;
 
 mod cache;
+mod file_handles;
 mod libc_extras;
 mod libc_wrappers;
 mod passthrough;

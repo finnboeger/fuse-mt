@@ -67,6 +67,8 @@ impl PassthroughFS {
 
 const TTL: Timespec = Timespec { sec: 1, nsec: 0 };
 
+// TODO: for all operations that change the file structure (e.g. delete, create, rename, chmod, ..)
+//       and for write operations on cached files return ENOSYS?
 impl FilesystemMT for PassthroughFS {
     fn init(&self, _req: RequestInfo) -> ResultEmpty {
         debug!("init");
@@ -81,6 +83,7 @@ impl FilesystemMT for PassthroughFS {
         debug!("getattr: {:?}", path);
 
         if let Some(fh) = fh {
+            // TODO: if fh is cached use stat_real
             match libc_wrappers::fstat(fh) {
                 Ok(stat) => Ok((TTL, stat_to_fuse(stat))),
                 Err(e) => Err(e),
@@ -94,6 +97,7 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn chmod(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, mode: u32) -> ResultEmpty {
+        // TODO: translate file handles.
         debug!("chmod: {:?} to {:#o}", path, mode);
 
         let result = if let Some(fh) = fh {
@@ -123,6 +127,7 @@ impl FilesystemMT for PassthroughFS {
         uid: Option<u32>,
         gid: Option<u32>,
     ) -> ResultEmpty {
+        // TODO: translate file handles.
         let uid = uid.unwrap_or(::std::u32::MAX); // docs say "-1", but uid_t is unsigned
         let gid = gid.unwrap_or(::std::u32::MAX); // ditto for gid_t
         debug!("chown: {:?} to {}:{}", path, uid, gid);
@@ -147,6 +152,7 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn truncate(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, size: u64) -> ResultEmpty {
+        // TODO: translate file handles. no-op for
         debug!("truncate: {:?} to {:#x}", path, size);
 
         let result = if let Some(fd) = fh {
@@ -176,6 +182,7 @@ impl FilesystemMT for PassthroughFS {
         atime: Option<Timespec>,
         mtime: Option<Timespec>,
     ) -> ResultEmpty {
+        // TODO: translate file handles.
         debug!("utimens: {:?}: {:?}, {:?}", path, atime, mtime);
 
         fn timespec_to_libc(time: Option<Timespec>) -> libc::timespec {
@@ -376,6 +383,7 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
+        // TODO: cache .txt reads
         debug!("open: {:?} flags={:#x}", path, flags);
 
         let real = self.real_path(path);
@@ -397,6 +405,7 @@ impl FilesystemMT for PassthroughFS {
         size: u32,
         callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult,
     ) -> CallbackResult {
+        // TODO: cache .txt reads
         debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
         let mut file = unsafe { UnmanagedFile::new(fh) };
 
@@ -429,6 +438,7 @@ impl FilesystemMT for PassthroughFS {
         data: Vec<u8>,
         _flags: u32,
     ) -> ResultWrite {
+        // TODO: translate file handles, fail if cached.
         debug!("write: {:?} {:#x} @ {:#x}", path, data.len(), offset);
         let mut file = unsafe { UnmanagedFile::new(fh) };
 
@@ -448,6 +458,7 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn flush(&self, _req: RequestInfo, path: &Path, fh: u64, _lock_owner: u64) -> ResultEmpty {
+        // TODO: translate file handles. Should be a no-op for cached files
         debug!("flush: {:?}", path);
         let mut file = unsafe { UnmanagedFile::new(fh) };
 
@@ -468,11 +479,13 @@ impl FilesystemMT for PassthroughFS {
         _lock_owner: u64,
         _flush: bool,
     ) -> ResultEmpty {
+        // Todo: translate file handles.
         debug!("release: {:?}", path);
         libc_wrappers::close(fh)
     }
 
     fn fsync(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
+        // TODO: translate file handles. Should be a no-op for cached files
         debug!("fsync: {:?}, data={:?}", path, datasync);
         let file = unsafe { UnmanagedFile::new(fh) };
 
@@ -562,11 +575,13 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn releasedir(&self, _req: RequestInfo, path: &Path, fh: u64, _flags: u32) -> ResultEmpty {
+        // TODO: Cache
         debug!("releasedir: {:?}", path);
         libc_wrappers::closedir(fh)
     }
 
     fn fsyncdir(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
+        // TODO: translate file handles. Should be a no-op for cached files
         debug!("fsyncdir: {:?} (datasync = {:?})", path, datasync);
 
         // TODO: what does datasync mean with regards to a directory handle?
