@@ -1,3 +1,5 @@
+use crate::stat::stat_to_fuse;
+use crate::types::SerializableFileAttr;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::ffi::OsString;
@@ -6,13 +8,18 @@ use std::io::{copy, Write};
 use std::path::Path;
 use walkdir::WalkDir;
 use zip::ZipArchive;
-use crate::types::SerializableFileAttr;
-use crate::stat::stat_to_fuse;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Entry {
-    Dict { name: String, contents: Vec<Entry>, stat: SerializableFileAttr },
-    File { name: String, stat: SerializableFileAttr },
+    Dict {
+        name: String,
+        contents: Vec<Entry>,
+        stat: SerializableFileAttr,
+    },
+    File {
+        name: String,
+        stat: SerializableFileAttr,
+    },
 }
 
 impl Entry {
@@ -31,27 +38,35 @@ impl Entry {
             Entry::Dict {
                 name,
                 contents: Vec::new(),
-                stat: SerializableFileAttr::from(stat_to_fuse(crate::libc_wrappers::lstat(OsString::from(path)).unwrap())),
+                stat: SerializableFileAttr::from(stat_to_fuse(
+                    crate::libc_wrappers::lstat(OsString::from(path)).unwrap(),
+                )),
             }
         } else {
             Entry::File {
                 name,
-                stat: SerializableFileAttr::from(stat_to_fuse(crate::libc_wrappers::lstat(OsString::from(path)).unwrap())),
+                stat: SerializableFileAttr::from(stat_to_fuse(
+                    crate::libc_wrappers::lstat(OsString::from(path)).unwrap(),
+                )),
             }
         }
     }
 
     fn add_entry(&mut self, path: &Path) -> Result<(), &str> {
         match self {
-            Entry::File{ name, stat} => Err("can't add entry to a file"),
-            Entry::Dict{ name, contents, stat} => {
+            Entry::File { name, stat } => Err("can't add entry to a file"),
+            Entry::Dict {
+                name,
+                contents,
+                stat,
+            } => {
                 contents.push(Entry::new(path));
                 Ok(())
             }
         }
     }
 
-    fn find(&mut self, path: &Path) -> Result<&mut Entry, &str> {
+    pub fn find(&self, path: &Path) -> Result<&Entry, &str> {
         if path == Path::new("") {
             return Ok(self);
         }
@@ -64,14 +79,64 @@ impl Entry {
         let mut item = Ok(self);
         for ancestor in ancestors {
             match item? {
-                Entry::File{ name, stat} => item = Err("can't search in a file"),
-                Entry::Dict{ name, contents, stat} => {
+                Entry::File { name, stat } => item = Err("can't search in a file"),
+                Entry::Dict {
+                    name,
+                    contents,
+                    stat,
+                } => {
                     // We're assuming that all Entries are sorted, therefore we can execute a binary search.
                     item = match contents.binary_search_by(|other: &Entry| -> Ordering {
                         let a = ancestor.file_name().unwrap().to_str().unwrap();
                         let b = match other {
-                            Entry::File{ name, stat} => name,
-                            Entry::Dict{ name, contents, stat} => name,
+                            Entry::File { name, stat } => name,
+                            Entry::Dict {
+                                name,
+                                contents,
+                                stat,
+                            } => name,
+                        };
+                        // TODO: solve File not Found error when it obviously exists
+                        b.cmp(&String::from(a))
+                    }) {
+                        Ok(i) => Ok(&contents[i]),
+                        Err(_) => Err("File not found"),
+                    };
+                }
+            }
+        }
+        item
+    }
+
+    fn find_mut(&mut self, path: &Path) -> Result<&mut Entry, &str> {
+        if path == Path::new("") {
+            return Ok(self);
+        }
+        let mut ancestors: Vec<&Path> = path.ancestors().collect();
+        // Drop last two ancestors which are the root element ('') and '.'
+        ancestors.pop();
+        ancestors.pop();
+        ancestors.reverse();
+
+        let mut item = Ok(self);
+        for ancestor in ancestors {
+            match item? {
+                Entry::File { name, stat } => item = Err("can't search in a file"),
+                Entry::Dict {
+                    name,
+                    contents,
+                    stat,
+                } => {
+                    // We're assuming that all Entries are sorted, therefore we can execute a binary search.
+                    item = match contents.binary_search_by(|other: &Entry| -> Ordering {
+                        let a = ancestor.file_name().unwrap().to_str().unwrap();
+                        let b = match other {
+                            Entry::File { name, stat } => name,
+                            Entry::Dict {
+                                name,
+                                contents,
+                                stat,
+                            } => name,
                         };
                         // TODO: solve File not Found error when it obviously exists
                         b.cmp(&String::from(a))
@@ -99,7 +164,9 @@ pub fn build(src_path: &str, output_path: &str) {
     let mut root = Entry::Dict {
         name: String::from("."),
         contents: Vec::new(),
-        stat: SerializableFileAttr::from(stat_to_fuse(crate::libc_wrappers::lstat(OsString::from(".")).unwrap())),
+        stat: SerializableFileAttr::from(stat_to_fuse(
+            crate::libc_wrappers::lstat(OsString::from(".")).unwrap(),
+        )),
     };
 
     std::env::set_current_dir(src_path).unwrap();
@@ -114,7 +181,7 @@ pub fn build(src_path: &str, output_path: &str) {
         // For a file to be added, the parent has to have been added first so unwrapping should be safe.
         let parent = match p.parent() {
             None => &mut root,
-            Some(x) => root.find(x).unwrap(),
+            Some(x) => root.find_mut(x).unwrap(),
         };
         &parent.add_entry(p).unwrap();
 

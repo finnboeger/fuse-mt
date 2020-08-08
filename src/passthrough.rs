@@ -15,10 +15,10 @@ use std::path::{Path, PathBuf};
 use crate::libc_extras::libc;
 use crate::libc_wrappers;
 
+use crate::cache::{load, Entry};
+use crate::stat::*;
 use fuse_mt::*;
 use time::*;
-use crate::cache::{Entry, load};
-use crate::stat::*;
 use zip::ZipArchive;
 
 pub struct PassthroughFS {
@@ -45,17 +45,22 @@ impl PassthroughFS {
     }
 
     fn stat_real(&self, path: &Path) -> io::Result<FileAttr> {
-        // TODO: use cache
-        let real: OsString = self.real_path(path);
-        debug!("stat_real: {:?}", real);
+        // Hack to change absolute path to relative path because the cache code expects a relative path starting with '.'
+        let mut base_str = String::from(".");
+        base_str.push_str(path.to_str().unwrap());
+        let rel_path = Path::new(&base_str);
 
-        match libc_wrappers::lstat(real) {
-            Ok(stat) => Ok(stat_to_fuse(stat)),
-            Err(e) => {
-                let err = io::Error::from_raw_os_error(e);
-                error!("lstat({:?}): {}", path, err);
-                Err(err)
-            }
+        match self.struct_cache.find(rel_path) {
+            Ok(Entry::Dict {
+                name,
+                contents,
+                stat,
+            }) => Ok((*stat).into()),
+            Ok(Entry::File { name, stat }) => Ok((*stat).into()),
+            Err(_) => Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "entry not found in cache",
+            )),
         }
     }
 }
@@ -73,7 +78,6 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn getattr(&self, _req: RequestInfo, path: &Path, fh: Option<u64>) -> ResultEntry {
-        // TODO: use cache
         debug!("getattr: {:?}", path);
 
         if let Some(fh) = fh {
@@ -84,7 +88,7 @@ impl FilesystemMT for PassthroughFS {
         } else {
             match self.stat_real(path) {
                 Ok(attr) => Ok((TTL, attr)),
-                Err(e) => Err(e.raw_os_error().unwrap()),
+                Err(e) => Err(libc::ENOENT),
             }
         }
     }
