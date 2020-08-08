@@ -43,11 +43,16 @@ impl Entry {
                 )),
             }
         } else {
+            let mut stat = SerializableFileAttr::from(stat_to_fuse(
+                crate::libc_wrappers::lstat(OsString::from(path)).unwrap(),
+            ));
+            if name.ends_with(".txt") {
+                // remove write permission as files will be read from cache and readonly.
+                stat.perm = stat.perm & 0o5555;
+            }
             Entry::File {
                 name,
-                stat: SerializableFileAttr::from(stat_to_fuse(
-                    crate::libc_wrappers::lstat(OsString::from(path)).unwrap(),
-                )),
+                stat,
             }
         }
     }
