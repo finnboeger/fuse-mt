@@ -89,197 +89,6 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
-    fn opendir(&self, _req: RequestInfo, path: &Path, _flags: u32) -> ResultOpen {
-        // TODO: use cache
-        let real = self.real_path(path);
-        debug!("opendir: {:?} (flags = {:#o})", real, _flags);
-        match libc_wrappers::opendir(real) {
-            Ok(fh) => Ok((fh, 0)),
-            Err(e) => {
-                let ioerr = io::Error::from_raw_os_error(e);
-                error!("opendir({:?}): {}", path, ioerr);
-                Err(e)
-            }
-        }
-    }
-
-    fn releasedir(&self, _req: RequestInfo, path: &Path, fh: u64, _flags: u32) -> ResultEmpty {
-        debug!("releasedir: {:?}", path);
-        libc_wrappers::closedir(fh)
-    }
-
-    fn readdir(&self, _req: RequestInfo, path: &Path, fh: u64) -> ResultReaddir {
-        // TODO: use cache
-        debug!("readdir: {:?}", path);
-        let mut entries: Vec<DirectoryEntry> = vec![];
-
-        if fh == 0 {
-            error!("readdir: missing fh");
-            return Err(libc::EINVAL);
-        }
-
-        loop {
-            match libc_wrappers::readdir(fh) {
-                Ok(Some(entry)) => {
-                    let name_c = unsafe { CStr::from_ptr(entry.d_name.as_ptr()) };
-                    let name = OsStr::from_bytes(name_c.to_bytes()).to_owned();
-
-                    let filetype = match entry.d_type {
-                        libc::DT_DIR => FileType::Directory,
-                        libc::DT_REG => FileType::RegularFile,
-                        libc::DT_LNK => FileType::Symlink,
-                        libc::DT_BLK => FileType::BlockDevice,
-                        libc::DT_CHR => FileType::CharDevice,
-                        libc::DT_FIFO => FileType::NamedPipe,
-                        libc::DT_SOCK => {
-                            warn!("FUSE doesn't support Socket file type; translating to NamedPipe instead.");
-                            FileType::NamedPipe
-                        }
-                        _ => {
-                            let entry_path = PathBuf::from(path).join(&name);
-                            let real_path = self.real_path(&entry_path);
-                            match libc_wrappers::lstat(real_path) {
-                                Ok(stat64) => mode_to_filetype(stat64.st_mode),
-                                Err(errno) => {
-                                    let ioerr = io::Error::from_raw_os_error(errno);
-                                    panic!("lstat failed after readdir_r gave no file type for {:?}: {}",
-                                           entry_path, ioerr);
-                                }
-                            }
-                        }
-                    };
-
-                    entries.push(DirectoryEntry {
-                        name,
-                        kind: filetype,
-                    })
-                }
-                Ok(None) => {
-                    break;
-                }
-                Err(e) => {
-                    error!("readdir: {:?}: {}", path, e);
-                    return Err(e);
-                }
-            }
-        }
-
-        Ok(entries)
-    }
-
-    fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
-        debug!("open: {:?} flags={:#x}", path, flags);
-
-        let real = self.real_path(path);
-        match libc_wrappers::open(real, flags as libc::c_int) {
-            Ok(fh) => Ok((fh, flags)),
-            Err(e) => {
-                error!("open({:?}): {}", path, io::Error::from_raw_os_error(e));
-                Err(e)
-            }
-        }
-    }
-
-    fn release(
-        &self,
-        _req: RequestInfo,
-        path: &Path,
-        fh: u64,
-        _flags: u32,
-        _lock_owner: u64,
-        _flush: bool,
-    ) -> ResultEmpty {
-        debug!("release: {:?}", path);
-        libc_wrappers::close(fh)
-    }
-
-    fn read(
-        &self,
-        _req: RequestInfo,
-        path: &Path,
-        fh: u64,
-        offset: u64,
-        size: u32,
-        callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult,
-    ) -> CallbackResult {
-        debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
-        let mut file = unsafe { UnmanagedFile::new(fh) };
-
-        let mut data = Vec::<u8>::with_capacity(size as usize);
-        unsafe { data.set_len(size as usize) };
-
-        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-            error!("seek({:?}, {}): {}", path, offset, e);
-            return callback(Err(e.raw_os_error().unwrap()));
-        }
-        match file.read(&mut data) {
-            Ok(n) => {
-                data.truncate(n);
-            }
-            Err(e) => {
-                error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
-                return callback(Err(e.raw_os_error().unwrap()));
-            }
-        }
-
-        callback(Ok(&data))
-    }
-
-    fn write(
-        &self,
-        _req: RequestInfo,
-        path: &Path,
-        fh: u64,
-        offset: u64,
-        data: Vec<u8>,
-        _flags: u32,
-    ) -> ResultWrite {
-        debug!("write: {:?} {:#x} @ {:#x}", path, data.len(), offset);
-        let mut file = unsafe { UnmanagedFile::new(fh) };
-
-        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-            error!("seek({:?}, {}): {}", path, offset, e);
-            return Err(e.raw_os_error().unwrap());
-        }
-        let nwritten: u32 = match file.write(&data) {
-            Ok(n) => n as u32,
-            Err(e) => {
-                error!("write {:?}, {:#x} @ {:#x}: {}", path, data.len(), offset, e);
-                return Err(e.raw_os_error().unwrap());
-            }
-        };
-
-        Ok(nwritten)
-    }
-
-    fn flush(&self, _req: RequestInfo, path: &Path, fh: u64, _lock_owner: u64) -> ResultEmpty {
-        debug!("flush: {:?}", path);
-        let mut file = unsafe { UnmanagedFile::new(fh) };
-
-        if let Err(e) = file.flush() {
-            error!("flush({:?}): {}", path, e);
-            return Err(e.raw_os_error().unwrap());
-        }
-
-        Ok(())
-    }
-
-    fn fsync(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
-        debug!("fsync: {:?}, data={:?}", path, datasync);
-        let file = unsafe { UnmanagedFile::new(fh) };
-
-        if let Err(e) = if datasync {
-            file.sync_data()
-        } else {
-            file.sync_all()
-        } {
-            error!("fsync({:?}, {:?}): {}", path, datasync, e);
-            return Err(e.raw_os_error().unwrap());
-        }
-
-        Ok(())
-    }
-
     fn chmod(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, mode: u32) -> ResultEmpty {
         debug!("chmod: {:?} to {:#o}", path, mode);
 
@@ -412,39 +221,6 @@ impl FilesystemMT for PassthroughFS {
         match ::std::fs::read_link(real) {
             Ok(target) => Ok(target.into_os_string().into_vec()),
             Err(e) => Err(e.raw_os_error().unwrap()),
-        }
-    }
-
-    fn statfs(&self, _req: RequestInfo, path: &Path) -> ResultStatfs {
-        debug!("statfs: {:?}", path);
-
-        let real = self.real_path(path);
-        let mut buf: libc::statfs = unsafe { ::std::mem::zeroed() };
-        let result = unsafe {
-            let path_c = CString::from_vec_unchecked(real.into_vec());
-            libc::statfs(path_c.as_ptr(), &mut buf)
-        };
-
-        if -1 == result {
-            let e = io::Error::last_os_error();
-            error!("statfs({:?}): {}", path, e);
-            Err(e.raw_os_error().unwrap())
-        } else {
-            Ok(statfs_to_fuse(buf))
-        }
-    }
-
-    fn fsyncdir(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
-        debug!("fsyncdir: {:?} (datasync = {:?})", path, datasync);
-
-        // TODO: what does datasync mean with regards to a directory handle?
-        let result = unsafe { libc::fsync(fh as libc::c_int) };
-        if -1 == result {
-            let e = io::Error::last_os_error();
-            error!("fsyncdir({:?}): {}", path, e);
-            Err(e.raw_os_error().unwrap())
-        } else {
-            Ok(())
         }
     }
 
@@ -595,6 +371,291 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
+    fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
+        debug!("open: {:?} flags={:#x}", path, flags);
+
+        let real = self.real_path(path);
+        match libc_wrappers::open(real, flags as libc::c_int) {
+            Ok(fh) => Ok((fh, flags)),
+            Err(e) => {
+                error!("open({:?}): {}", path, io::Error::from_raw_os_error(e));
+                Err(e)
+            }
+        }
+    }
+
+    fn read(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        fh: u64,
+        offset: u64,
+        size: u32,
+        callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult,
+    ) -> CallbackResult {
+        debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
+        let mut file = unsafe { UnmanagedFile::new(fh) };
+
+        let mut data = Vec::<u8>::with_capacity(size as usize);
+        unsafe { data.set_len(size as usize) };
+
+        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+            error!("seek({:?}, {}): {}", path, offset, e);
+            return callback(Err(e.raw_os_error().unwrap()));
+        }
+        match file.read(&mut data) {
+            Ok(n) => {
+                data.truncate(n);
+            }
+            Err(e) => {
+                error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
+                return callback(Err(e.raw_os_error().unwrap()));
+            }
+        }
+
+        callback(Ok(&data))
+    }
+
+    fn write(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        fh: u64,
+        offset: u64,
+        data: Vec<u8>,
+        _flags: u32,
+    ) -> ResultWrite {
+        debug!("write: {:?} {:#x} @ {:#x}", path, data.len(), offset);
+        let mut file = unsafe { UnmanagedFile::new(fh) };
+
+        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+            error!("seek({:?}, {}): {}", path, offset, e);
+            return Err(e.raw_os_error().unwrap());
+        }
+        let nwritten: u32 = match file.write(&data) {
+            Ok(n) => n as u32,
+            Err(e) => {
+                error!("write {:?}, {:#x} @ {:#x}: {}", path, data.len(), offset, e);
+                return Err(e.raw_os_error().unwrap());
+            }
+        };
+
+        Ok(nwritten)
+    }
+
+    fn flush(&self, _req: RequestInfo, path: &Path, fh: u64, _lock_owner: u64) -> ResultEmpty {
+        debug!("flush: {:?}", path);
+        let mut file = unsafe { UnmanagedFile::new(fh) };
+
+        if let Err(e) = file.flush() {
+            error!("flush({:?}): {}", path, e);
+            return Err(e.raw_os_error().unwrap());
+        }
+
+        Ok(())
+    }
+
+    fn release(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        fh: u64,
+        _flags: u32,
+        _lock_owner: u64,
+        _flush: bool,
+    ) -> ResultEmpty {
+        debug!("release: {:?}", path);
+        libc_wrappers::close(fh)
+    }
+
+    fn fsync(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
+        debug!("fsync: {:?}, data={:?}", path, datasync);
+        let file = unsafe { UnmanagedFile::new(fh) };
+
+        if let Err(e) = if datasync {
+            file.sync_data()
+        } else {
+            file.sync_all()
+        } {
+            error!("fsync({:?}, {:?}): {}", path, datasync, e);
+            return Err(e.raw_os_error().unwrap());
+        }
+
+        Ok(())
+    }
+
+    fn opendir(&self, _req: RequestInfo, path: &Path, _flags: u32) -> ResultOpen {
+        // TODO: use cache
+        let real = self.real_path(path);
+        debug!("opendir: {:?} (flags = {:#o})", real, _flags);
+        match libc_wrappers::opendir(real) {
+            Ok(fh) => Ok((fh, 0)),
+            Err(e) => {
+                let ioerr = io::Error::from_raw_os_error(e);
+                error!("opendir({:?}): {}", path, ioerr);
+                Err(e)
+            }
+        }
+    }
+
+    fn readdir(&self, _req: RequestInfo, path: &Path, fh: u64) -> ResultReaddir {
+        // TODO: use cache
+        debug!("readdir: {:?}", path);
+        let mut entries: Vec<DirectoryEntry> = vec![];
+
+        if fh == 0 {
+            error!("readdir: missing fh");
+            return Err(libc::EINVAL);
+        }
+
+        loop {
+            match libc_wrappers::readdir(fh) {
+                Ok(Some(entry)) => {
+                    let name_c = unsafe { CStr::from_ptr(entry.d_name.as_ptr()) };
+                    let name = OsStr::from_bytes(name_c.to_bytes()).to_owned();
+
+                    let filetype = match entry.d_type {
+                        libc::DT_DIR => FileType::Directory,
+                        libc::DT_REG => FileType::RegularFile,
+                        libc::DT_LNK => FileType::Symlink,
+                        libc::DT_BLK => FileType::BlockDevice,
+                        libc::DT_CHR => FileType::CharDevice,
+                        libc::DT_FIFO => FileType::NamedPipe,
+                        libc::DT_SOCK => {
+                            warn!("FUSE doesn't support Socket file type; translating to NamedPipe instead.");
+                            FileType::NamedPipe
+                        }
+                        _ => {
+                            let entry_path = PathBuf::from(path).join(&name);
+                            let real_path = self.real_path(&entry_path);
+                            match libc_wrappers::lstat(real_path) {
+                                Ok(stat64) => mode_to_filetype(stat64.st_mode),
+                                Err(errno) => {
+                                    let ioerr = io::Error::from_raw_os_error(errno);
+                                    panic!("lstat failed after readdir_r gave no file type for {:?}: {}",
+                                           entry_path, ioerr);
+                                }
+                            }
+                        }
+                    };
+
+                    entries.push(DirectoryEntry {
+                        name,
+                        kind: filetype,
+                    })
+                }
+                Ok(None) => {
+                    break;
+                }
+                Err(e) => {
+                    error!("readdir: {:?}: {}", path, e);
+                    return Err(e);
+                }
+            }
+        }
+
+        Ok(entries)
+    }
+
+    fn releasedir(&self, _req: RequestInfo, path: &Path, fh: u64, _flags: u32) -> ResultEmpty {
+        debug!("releasedir: {:?}", path);
+        libc_wrappers::closedir(fh)
+    }
+
+    fn fsyncdir(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
+        debug!("fsyncdir: {:?} (datasync = {:?})", path, datasync);
+
+        // TODO: what does datasync mean with regards to a directory handle?
+        let result = unsafe { libc::fsync(fh as libc::c_int) };
+        if -1 == result {
+            let e = io::Error::last_os_error();
+            error!("fsyncdir({:?}): {}", path, e);
+            Err(e.raw_os_error().unwrap())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn statfs(&self, _req: RequestInfo, path: &Path) -> ResultStatfs {
+        debug!("statfs: {:?}", path);
+
+        let real = self.real_path(path);
+        let mut buf: libc::statfs = unsafe { ::std::mem::zeroed() };
+        let result = unsafe {
+            let path_c = CString::from_vec_unchecked(real.into_vec());
+            libc::statfs(path_c.as_ptr(), &mut buf)
+        };
+
+        if -1 == result {
+            let e = io::Error::last_os_error();
+            error!("statfs({:?}): {}", path, e);
+            Err(e.raw_os_error().unwrap())
+        } else {
+            Ok(statfs_to_fuse(buf))
+        }
+    }
+
+    fn setxattr(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        name: &OsStr,
+        value: &[u8],
+        flags: u32,
+        position: u32,
+    ) -> ResultEmpty {
+        debug!(
+            "setxattr: {:?} {:?} {} bytes, flags = {:#x}, pos = {}",
+            path,
+            name,
+            value.len(),
+            flags,
+            position
+        );
+        let real = self.real_path(path);
+        libc_wrappers::lsetxattr(real, name.to_owned(), value, flags, position)
+    }
+
+    fn getxattr(&self, _req: RequestInfo, path: &Path, name: &OsStr, size: u32) -> ResultXattr {
+        debug!("getxattr: {:?} {:?} {}", path, name, size);
+
+        let real = self.real_path(path);
+
+        if size > 0 {
+            let mut data = Vec::<u8>::with_capacity(size as usize);
+            unsafe { data.set_len(size as usize) };
+            let nread = libc_wrappers::lgetxattr(real, name.to_owned(), data.as_mut_slice())?;
+            data.truncate(nread);
+            Ok(Xattr::Data(data))
+        } else {
+            let nbytes = libc_wrappers::lgetxattr(real, name.to_owned(), &mut [])?;
+            Ok(Xattr::Size(nbytes as u32))
+        }
+    }
+
+    fn listxattr(&self, _req: RequestInfo, path: &Path, size: u32) -> ResultXattr {
+        debug!("listxattr: {:?}", path);
+
+        let real = self.real_path(path);
+
+        if size > 0 {
+            let mut data = Vec::<u8>::with_capacity(size as usize);
+            unsafe { data.set_len(size as usize) };
+            let nread = libc_wrappers::llistxattr(real, data.as_mut_slice())?;
+            data.truncate(nread);
+            Ok(Xattr::Data(data))
+        } else {
+            let nbytes = libc_wrappers::llistxattr(real, &mut [])?;
+            Ok(Xattr::Size(nbytes as u32))
+        }
+    }
+
+    fn removexattr(&self, _req: RequestInfo, path: &Path, name: &OsStr) -> ResultEmpty {
+        debug!("removexattr: {:?} {:?}", path, name);
+        let real = self.real_path(path);
+        libc_wrappers::lremovexattr(real, name.to_owned())
+    }
+
     fn create(
         &self,
         _req: RequestInfo,
@@ -640,67 +701,6 @@ impl FilesystemMT for PassthroughFS {
                 }
             }
         }
-    }
-
-    fn listxattr(&self, _req: RequestInfo, path: &Path, size: u32) -> ResultXattr {
-        debug!("listxattr: {:?}", path);
-
-        let real = self.real_path(path);
-
-        if size > 0 {
-            let mut data = Vec::<u8>::with_capacity(size as usize);
-            unsafe { data.set_len(size as usize) };
-            let nread = libc_wrappers::llistxattr(real, data.as_mut_slice())?;
-            data.truncate(nread);
-            Ok(Xattr::Data(data))
-        } else {
-            let nbytes = libc_wrappers::llistxattr(real, &mut [])?;
-            Ok(Xattr::Size(nbytes as u32))
-        }
-    }
-
-    fn getxattr(&self, _req: RequestInfo, path: &Path, name: &OsStr, size: u32) -> ResultXattr {
-        debug!("getxattr: {:?} {:?} {}", path, name, size);
-
-        let real = self.real_path(path);
-
-        if size > 0 {
-            let mut data = Vec::<u8>::with_capacity(size as usize);
-            unsafe { data.set_len(size as usize) };
-            let nread = libc_wrappers::lgetxattr(real, name.to_owned(), data.as_mut_slice())?;
-            data.truncate(nread);
-            Ok(Xattr::Data(data))
-        } else {
-            let nbytes = libc_wrappers::lgetxattr(real, name.to_owned(), &mut [])?;
-            Ok(Xattr::Size(nbytes as u32))
-        }
-    }
-
-    fn setxattr(
-        &self,
-        _req: RequestInfo,
-        path: &Path,
-        name: &OsStr,
-        value: &[u8],
-        flags: u32,
-        position: u32,
-    ) -> ResultEmpty {
-        debug!(
-            "setxattr: {:?} {:?} {} bytes, flags = {:#x}, pos = {}",
-            path,
-            name,
-            value.len(),
-            flags,
-            position
-        );
-        let real = self.real_path(path);
-        libc_wrappers::lsetxattr(real, name.to_owned(), value, flags, position)
-    }
-
-    fn removexattr(&self, _req: RequestInfo, path: &Path, name: &OsStr) -> ResultEmpty {
-        debug!("removexattr: {:?} {:?}", path, name);
-        let real = self.real_path(path);
-        libc_wrappers::lremovexattr(real, name.to_owned())
     }
 
     #[cfg(target_os = "macos")]
