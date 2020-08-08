@@ -47,7 +47,7 @@ fn main() {
                 .long("cache")
                 .takes_value(true)
                 .value_name("FILE")
-                .default_value("cache.ufs")
+                .default_value("cache.zip")
                 .help("Sets a custom cache file."))
             .arg(Arg::with_name("source")
                 .help("Sets the directory that will be mirrored.")
@@ -66,7 +66,7 @@ fn main() {
                 .long("output")
                 .takes_value(true)
                 .value_name("FILE")
-                .default_value("cache.ufs")
+                .default_value("cache.zip")
                 .help("Specify where the created cache file should be saved.")))
         .get_matches();
 
@@ -85,7 +85,7 @@ fn main() {
             fuse_mt::mount(fuse_mt::FuseMT::new(filesystem, 1), &mount_point, &fuse_args).unwrap();
         },
         ("build", Some(sub_matches)) => {
-            cache::build(sub_matches.value_of("root").unwrap());
+            cache::build(sub_matches.value_of("root").unwrap(), sub_matches.value_of("output").unwrap());
         },
         _ => {}
     }

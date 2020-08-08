@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 use std::path::Path;
+use std::fs::File;
+use std::io::{copy, Write};
 use serde::{Serialize, Deserialize};
 use walkdir::WalkDir;
 
@@ -83,10 +85,14 @@ impl Entry {
 }
 
 //TODO: Error handling
-pub fn build(path: &str) {
+pub fn build(src_path: &str, output_path: &str) {
 
     // TODO: assert path is a directory
     let working_dir = std::env::current_dir().unwrap();
+
+    let zip_file = File::create(output_path).unwrap();
+    let mut zip = zip::ZipWriter::new(zip_file);
+    let options = zip::write::FileOptions::default();
 
     // Create root
     let mut root = Entry::Dict {
@@ -94,7 +100,7 @@ pub fn build(path: &str) {
         contents: Vec::new(),
     };
 
-    std::env::set_current_dir(path).unwrap();
+    std::env::set_current_dir(src_path).unwrap();
     let entries = WalkDir::new(".")
         .sort_by(|a, b| a.file_name().cmp(b.file_name()))
         .min_depth(1);
@@ -110,8 +116,18 @@ pub fn build(path: &str) {
             Some(x) => root.find(x).unwrap(),
         };
         &parent.add_entry(p).unwrap();
+
+        // Add to cache if it is a .txt-file
+        if p.file_name().unwrap().to_str().unwrap().ends_with(".txt") {
+            zip.start_file_from_path(p, options).unwrap();
+            let mut file = File::open(p).unwrap();
+            copy(&mut file, &mut zip).unwrap();
+        }
     }
-    println!("{}", serde_json::to_string_pretty(&root).unwrap());
+
+    // Store directory structure
+    zip.start_file("files.json", options).unwrap();
+    zip.write(serde_json::to_string_pretty(&root).unwrap().as_bytes()).unwrap();
 
     // Restore original working directory
     std::env::set_current_dir(working_dir).unwrap();
