@@ -19,6 +19,8 @@ mod cache;
 mod libc_extras;
 mod libc_wrappers;
 mod passthrough;
+mod stat;
+mod types;
 
 fn main() {
     Builder::new()
@@ -76,9 +78,10 @@ fn main() {
         ("mount", Some(sub_matches)) => {
             // TODO: load and use cache
 
-            let filesystem = passthrough::PassthroughFS {
-                target: OsString::from(sub_matches.value_of_os("source").unwrap()),
-            };
+            let filesystem = passthrough::PassthroughFS::new(
+                OsString::from(sub_matches.value_of_os("source").unwrap()),
+                sub_matches.value_of("cache").unwrap(),
+            );
 
             let fuse_args: Vec<&OsStr> = vec![&OsStr::new("-o"), &OsStr::new("auto_unmount")];
 

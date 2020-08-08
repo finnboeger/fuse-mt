@@ -1,14 +1,18 @@
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{copy, Write};
 use std::path::Path;
 use walkdir::WalkDir;
+use zip::ZipArchive;
+use crate::types::SerializableFileAttr;
+use crate::stat::stat_to_fuse;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Entry {
-    Dict { name: String, contents: Vec<Entry> },
-    File(String),
+    Dict { name: String, contents: Vec<Entry>, stat: SerializableFileAttr },
+    File { name: String, stat: SerializableFileAttr },
 }
 
 impl Entry {
@@ -27,16 +31,20 @@ impl Entry {
             Entry::Dict {
                 name,
                 contents: Vec::new(),
+                stat: SerializableFileAttr::from(stat_to_fuse(crate::libc_wrappers::lstat(OsString::from(path)).unwrap())),
             }
         } else {
-            Entry::File(name)
+            Entry::File {
+                name,
+                stat: SerializableFileAttr::from(stat_to_fuse(crate::libc_wrappers::lstat(OsString::from(path)).unwrap())),
+            }
         }
     }
 
     fn add_entry(&mut self, path: &Path) -> Result<(), &str> {
         match self {
-            Entry::File(_) => Err("can't add entry to a file"),
-            Entry::Dict { name, contents } => {
+            Entry::File{ name, stat} => Err("can't add entry to a file"),
+            Entry::Dict{ name, contents, stat} => {
                 contents.push(Entry::new(path));
                 Ok(())
             }
@@ -56,14 +64,14 @@ impl Entry {
         let mut item = Ok(self);
         for ancestor in ancestors {
             match item? {
-                Entry::File(_) => item = Err("can't search in a file"),
-                Entry::Dict { name, contents } => {
+                Entry::File{ name, stat} => item = Err("can't search in a file"),
+                Entry::Dict{ name, contents, stat} => {
                     // We're assuming that all Entries are sorted, therefore we can execute a binary search.
                     item = match contents.binary_search_by(|other: &Entry| -> Ordering {
                         let a = ancestor.file_name().unwrap().to_str().unwrap();
                         let b = match other {
-                            Entry::File(s) => s,
-                            Entry::Dict { name, contents } => name,
+                            Entry::File{ name, stat} => name,
+                            Entry::Dict{ name, contents, stat} => name,
                         };
                         // TODO: solve File not Found error when it obviously exists
                         b.cmp(&String::from(a))
@@ -91,6 +99,7 @@ pub fn build(src_path: &str, output_path: &str) {
     let mut root = Entry::Dict {
         name: String::from("."),
         contents: Vec::new(),
+        stat: SerializableFileAttr::from(stat_to_fuse(crate::libc_wrappers::lstat(OsString::from(".")).unwrap())),
     };
 
     std::env::set_current_dir(src_path).unwrap();
@@ -131,5 +140,9 @@ pub fn build(src_path: &str, output_path: &str) {
 pub fn load(path: &str) -> Entry {
     let file = File::open(path).unwrap();
     let mut zip = zip::ZipArchive::new(file).unwrap();
+    serde_json::from_reader(zip.by_name("files.json").unwrap()).unwrap()
+}
+
+pub fn load_from_zip(zip: &mut ZipArchive<File>) -> Entry {
     serde_json::from_reader(zip.by_name("files.json").unwrap()).unwrap()
 }
