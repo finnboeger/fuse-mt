@@ -1,8 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::path::Path;
 use std::fs::File;
 use std::io::{copy, Write};
-use serde::{Serialize, Deserialize};
+use std::path::Path;
 use walkdir::WalkDir;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,7 +63,7 @@ impl Entry {
                         let a = ancestor.file_name().unwrap().to_str().unwrap();
                         let b = match other {
                             Entry::File(s) => s,
-                            Entry::Dict{ name, contents } => name,
+                            Entry::Dict { name, contents } => name,
                         };
                         // TODO: solve File not Found error when it obviously exists
                         b.cmp(&String::from(a))
@@ -80,7 +80,6 @@ impl Entry {
 
 //TODO: Error handling
 pub fn build(src_path: &str, output_path: &str) {
-
     // TODO: assert path is a directory
     let working_dir = std::env::current_dir().unwrap();
 
@@ -120,7 +119,8 @@ pub fn build(src_path: &str, output_path: &str) {
 
     // Store directory structure
     zip.start_file("files.json", options).unwrap();
-    zip.write(serde_json::to_string_pretty(&root).unwrap().as_bytes()).unwrap();
+    zip.write(serde_json::to_string_pretty(&root).unwrap().as_bytes())
+        .unwrap();
 
     // Restore original working directory
     std::env::set_current_dir(working_dir).unwrap();

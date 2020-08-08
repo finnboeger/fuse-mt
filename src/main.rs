@@ -5,31 +5,33 @@
 
 #![deny(rust_2018_idioms)]
 
-use std::ffi::{OsStr, OsString};
 use chrono::Local;
+use clap::{App, AppSettings, Arg, SubCommand};
 use env_logger::Builder;
 use log::LevelFilter;
+use std::ffi::{OsStr, OsString};
 use std::io::Write;
-use clap::{Arg, App, AppSettings, SubCommand};
 
 #[macro_use]
 extern crate log;
 
+mod cache;
 mod libc_extras;
 mod libc_wrappers;
 mod passthrough;
-mod cache;
 
 fn main() {
     Builder::new()
         .format(|buf, record| {
-            writeln!(buf,
-                     "{} [{}]: {}: {}",
-                     Local::now().format("%Y-%m-%dT%H:%M:%S"),
-                     record.level(),
-                     record.target(),
-                     record.args()
-            )})
+            writeln!(
+                buf,
+                "{} [{}]: {}: {}",
+                Local::now().format("%Y-%m-%dT%H:%M:%S"),
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        })
         .filter(Some("fuse_mt"), LevelFilter::Warn)
         .filter(Some("fuse"), LevelFilter::Warn)
         .filter(None, LevelFilter::Warn)
@@ -82,11 +84,19 @@ fn main() {
 
             let mount_point: OsString = OsString::from(sub_matches.value_of_os("target").unwrap());
 
-            fuse_mt::mount(fuse_mt::FuseMT::new(filesystem, 1), &mount_point, &fuse_args).unwrap();
-        },
+            fuse_mt::mount(
+                fuse_mt::FuseMT::new(filesystem, 1),
+                &mount_point,
+                &fuse_args,
+            )
+            .unwrap();
+        }
         ("build", Some(sub_matches)) => {
-            cache::build(sub_matches.value_of("root").unwrap(), sub_matches.value_of("output").unwrap());
-        },
+            cache::build(
+                sub_matches.value_of("root").unwrap(),
+                sub_matches.value_of("output").unwrap(),
+            );
+        }
         _ => {}
     }
 }

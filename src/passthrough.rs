@@ -7,7 +7,7 @@
 
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::{self, File};
-use std::io::{self, Read, Write, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
@@ -29,9 +29,11 @@ fn mode_to_filetype(mode: libc::mode_t) -> FileType {
         libc::S_IFLNK => FileType::Symlink,
         libc::S_IFBLK => FileType::BlockDevice,
         libc::S_IFCHR => FileType::CharDevice,
-        libc::S_IFIFO  => FileType::NamedPipe,
+        libc::S_IFIFO => FileType::NamedPipe,
         libc::S_IFSOCK => FileType::Socket,
-        _ => { panic!("unknown file type"); }
+        _ => {
+            panic!("unknown file type");
+        }
     }
 }
 
@@ -43,9 +45,18 @@ fn stat_to_fuse(stat: libc::stat64) -> FileAttr {
     FileAttr {
         size: stat.st_size as u64,
         blocks: stat.st_blocks as u64,
-        atime: Timespec { sec: stat.st_atime as i64, nsec: stat.st_atime_nsec as i32 },
-        mtime: Timespec { sec: stat.st_mtime as i64, nsec: stat.st_mtime_nsec as i32 },
-        ctime: Timespec { sec: stat.st_ctime as i64, nsec: stat.st_ctime_nsec as i32 },
+        atime: Timespec {
+            sec: stat.st_atime as i64,
+            nsec: stat.st_atime_nsec as i32,
+        },
+        mtime: Timespec {
+            sec: stat.st_mtime as i64,
+            nsec: stat.st_mtime_nsec as i32,
+        },
+        ctime: Timespec {
+            sec: stat.st_ctime as i64,
+            nsec: stat.st_ctime_nsec as i32,
+        },
         crtime: Timespec { sec: 0, nsec: 0 },
         kind,
         perm,
@@ -67,7 +78,7 @@ fn statfs_to_fuse(statfs: libc::statfs) -> Statfs {
         ffree: statfs.f_ffree,
         bsize: statfs.f_bsize as u32,
         namelen: 0, // TODO
-        frsize: 0, // TODO
+        frsize: 0,  // TODO
     }
 }
 
@@ -88,8 +99,8 @@ fn statfs_to_fuse(statfs: libc::statfs) -> Statfs {
 impl PassthroughFS {
     fn real_path(&self, partial: &Path) -> OsString {
         PathBuf::from(&self.target)
-                .join(partial.strip_prefix("/").unwrap())
-                .into_os_string()
+            .join(partial.strip_prefix("/").unwrap())
+            .into_os_string()
     }
 
     fn stat_real(&self, path: &Path) -> io::Result<FileAttr> {
@@ -98,9 +109,7 @@ impl PassthroughFS {
         debug!("stat_real: {:?}", real);
 
         match libc_wrappers::lstat(real) {
-            Ok(stat) => {
-                Ok(stat_to_fuse(stat))
-            },
+            Ok(stat) => Ok(stat_to_fuse(stat)),
             Err(e) => {
                 let err = io::Error::from_raw_os_error(e);
                 error!("lstat({:?}): {}", path, err);
@@ -129,12 +138,12 @@ impl FilesystemMT for PassthroughFS {
         if let Some(fh) = fh {
             match libc_wrappers::fstat(fh) {
                 Ok(stat) => Ok((TTL, stat_to_fuse(stat))),
-                Err(e) => Err(e)
+                Err(e) => Err(e),
             }
         } else {
             match self.stat_real(path) {
                 Ok(attr) => Ok((TTL, attr)),
-                Err(e) => Err(e.raw_os_error().unwrap())
+                Err(e) => Err(e.raw_os_error().unwrap()),
             }
         }
     }
@@ -184,7 +193,7 @@ impl FilesystemMT for PassthroughFS {
                         libc::DT_SOCK => {
                             warn!("FUSE doesn't support Socket file type; translating to NamedPipe instead.");
                             FileType::NamedPipe
-                        },
+                        }
                         _ => {
                             let entry_path = PathBuf::from(path).join(&name);
                             let real_path = self.real_path(&entry_path);
@@ -203,8 +212,10 @@ impl FilesystemMT for PassthroughFS {
                         name,
                         kind: filetype,
                     })
-                },
-                Ok(None) => { break; },
+                }
+                Ok(None) => {
+                    break;
+                }
                 Err(e) => {
                     error!("readdir: {:?}: {}", path, e);
                     return Err(e);
@@ -228,12 +239,28 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
-    fn release(&self, _req: RequestInfo, path: &Path, fh: u64, _flags: u32, _lock_owner: u64, _flush: bool) -> ResultEmpty {
+    fn release(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        fh: u64,
+        _flags: u32,
+        _lock_owner: u64,
+        _flush: bool,
+    ) -> ResultEmpty {
         debug!("release: {:?}", path);
         libc_wrappers::close(fh)
     }
 
-    fn read(&self, _req: RequestInfo, path: &Path, fh: u64, offset: u64, size: u32, callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult) -> CallbackResult {
+    fn read(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        fh: u64,
+        offset: u64,
+        size: u32,
+        callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult,
+    ) -> CallbackResult {
         debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
         let mut file = unsafe { UnmanagedFile::new(fh) };
 
@@ -245,7 +272,9 @@ impl FilesystemMT for PassthroughFS {
             return callback(Err(e.raw_os_error().unwrap()));
         }
         match file.read(&mut data) {
-            Ok(n) => { data.truncate(n); },
+            Ok(n) => {
+                data.truncate(n);
+            }
             Err(e) => {
                 error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
                 return callback(Err(e.raw_os_error().unwrap()));
@@ -255,7 +284,15 @@ impl FilesystemMT for PassthroughFS {
         callback(Ok(&data))
     }
 
-    fn write(&self, _req: RequestInfo, path: &Path, fh: u64, offset: u64, data: Vec<u8>, _flags: u32) -> ResultWrite {
+    fn write(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        fh: u64,
+        offset: u64,
+        data: Vec<u8>,
+        _flags: u32,
+    ) -> ResultWrite {
         debug!("write: {:?} {:#x} @ {:#x}", path, data.len(), offset);
         let mut file = unsafe { UnmanagedFile::new(fh) };
 
@@ -324,9 +361,16 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
-    fn chown(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, uid: Option<u32>, gid: Option<u32>) -> ResultEmpty {
-        let uid = uid.unwrap_or(::std::u32::MAX);   // docs say "-1", but uid_t is unsigned
-        let gid = gid.unwrap_or(::std::u32::MAX);   // ditto for gid_t
+    fn chown(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        fh: Option<u64>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+    ) -> ResultEmpty {
+        let uid = uid.unwrap_or(::std::u32::MAX); // docs say "-1", but uid_t is unsigned
+        let gid = gid.unwrap_or(::std::u32::MAX); // ditto for gid_t
         debug!("chown: {:?} to {}:{}", path, uid, gid);
 
         let result = if let Some(fd) = fh {
@@ -370,9 +414,15 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
-    fn utimens(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, atime: Option<Timespec>, mtime: Option<Timespec>) -> ResultEmpty {
+    fn utimens(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        fh: Option<u64>,
+        atime: Option<Timespec>,
+        mtime: Option<Timespec>,
+    ) -> ResultEmpty {
         debug!("utimens: {:?}: {:?}, {:?}", path, atime, mtime);
-
 
         fn timespec_to_libc(time: Option<Timespec>) -> libc::timespec {
             if let Some(time) = time {
@@ -396,7 +446,12 @@ impl FilesystemMT for PassthroughFS {
             let real = self.real_path(path);
             unsafe {
                 let path_c = CString::from_vec_unchecked(real.into_vec());
-                libc::utimensat(libc::AT_FDCWD, path_c.as_ptr(), &times as *const libc::timespec, libc::AT_SYMLINK_NOFOLLOW)
+                libc::utimensat(
+                    libc::AT_FDCWD,
+                    path_c.as_ptr(),
+                    &times as *const libc::timespec,
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
             }
         };
 
@@ -452,8 +507,18 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
-    fn mknod(&self, _req: RequestInfo, parent_path: &Path, name: &OsStr, mode: u32, rdev: u32) -> ResultEntry {
-        debug!("mknod: {:?}/{:?} (mode={:#o}, rdev={})", parent_path, name, mode, rdev);
+    fn mknod(
+        &self,
+        _req: RequestInfo,
+        parent_path: &Path,
+        name: &OsStr,
+        mode: u32,
+        rdev: u32,
+    ) -> ResultEntry {
+        debug!(
+            "mknod: {:?}/{:?} (mode={:#o}, rdev={})",
+            parent_path, name, mode, rdev
+        );
 
         let real = PathBuf::from(self.real_path(parent_path)).join(name);
         let result = unsafe {
@@ -468,7 +533,7 @@ impl FilesystemMT for PassthroughFS {
         } else {
             match libc_wrappers::lstat(real.into_os_string()) {
                 Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
-                Err(e) => Err(e),   // if this happens, yikes
+                Err(e) => Err(e), // if this happens, yikes
             }
         }
     }
@@ -491,8 +556,8 @@ impl FilesystemMT for PassthroughFS {
                 Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
                 Err(e) => {
                     error!("lstat after mkdir({:?}, {:#o}): {}", real, mode, e);
-                    Err(e)   // if this happens, yikes
-                },
+                    Err(e) // if this happens, yikes
+                }
             }
         }
     }
@@ -501,36 +566,38 @@ impl FilesystemMT for PassthroughFS {
         debug!("unlink {:?}/{:?}", parent_path, name);
 
         let real = PathBuf::from(self.real_path(parent_path)).join(name);
-        fs::remove_file(&real)
-            .map_err(|ioerr| {
-                error!("unlink({:?}): {}", real, ioerr);
-                ioerr.raw_os_error().unwrap()
-            })
+        fs::remove_file(&real).map_err(|ioerr| {
+            error!("unlink({:?}): {}", real, ioerr);
+            ioerr.raw_os_error().unwrap()
+        })
     }
 
     fn rmdir(&self, _req: RequestInfo, parent_path: &Path, name: &OsStr) -> ResultEmpty {
         debug!("rmdir: {:?}/{:?}", parent_path, name);
 
         let real = PathBuf::from(self.real_path(parent_path)).join(name);
-        fs::remove_dir(&real)
-            .map_err(|ioerr| {
-                error!("rmdir({:?}): {}", real, ioerr);
-                ioerr.raw_os_error().unwrap()
-            })
+        fs::remove_dir(&real).map_err(|ioerr| {
+            error!("rmdir({:?}): {}", real, ioerr);
+            ioerr.raw_os_error().unwrap()
+        })
     }
 
-    fn symlink(&self, _req: RequestInfo, parent_path: &Path, name: &OsStr, target: &Path) -> ResultEntry {
+    fn symlink(
+        &self,
+        _req: RequestInfo,
+        parent_path: &Path,
+        name: &OsStr,
+        target: &Path,
+    ) -> ResultEntry {
         debug!("symlink: {:?}/{:?} -> {:?}", parent_path, name, target);
 
         let real = PathBuf::from(self.real_path(parent_path)).join(name);
         match ::std::os::unix::fs::symlink(target, &real) {
-            Ok(()) => {
-                match libc_wrappers::lstat(real.clone().into_os_string()) {
-                    Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
-                    Err(e) => {
-                        error!("lstat after symlink({:?}, {:?}): {}", real, target, e);
-                        Err(e)
-                    },
+            Ok(()) => match libc_wrappers::lstat(real.clone().into_os_string()) {
+                Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
+                Err(e) => {
+                    error!("lstat after symlink({:?}, {:?}): {}", real, target, e);
+                    Err(e)
                 }
             },
             Err(e) => {
@@ -540,47 +607,74 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
-    fn rename(&self, _req: RequestInfo, parent_path: &Path, name: &OsStr, newparent_path: &Path, newname: &OsStr) -> ResultEmpty {
-        debug!("rename: {:?}/{:?} -> {:?}/{:?}", parent_path, name, newparent_path, newname);
+    fn rename(
+        &self,
+        _req: RequestInfo,
+        parent_path: &Path,
+        name: &OsStr,
+        newparent_path: &Path,
+        newname: &OsStr,
+    ) -> ResultEmpty {
+        debug!(
+            "rename: {:?}/{:?} -> {:?}/{:?}",
+            parent_path, name, newparent_path, newname
+        );
 
         let real = PathBuf::from(self.real_path(parent_path)).join(name);
         let newreal = PathBuf::from(self.real_path(newparent_path)).join(newname);
-        fs::rename(&real, &newreal)
-            .map_err(|ioerr| {
-                error!("rename({:?}, {:?}): {}", real, newreal, ioerr);
-                ioerr.raw_os_error().unwrap()
-            })
+        fs::rename(&real, &newreal).map_err(|ioerr| {
+            error!("rename({:?}, {:?}): {}", real, newreal, ioerr);
+            ioerr.raw_os_error().unwrap()
+        })
     }
 
-    fn link(&self, _req: RequestInfo, path: &Path, newparent: &Path, newname: &OsStr) -> ResultEntry {
+    fn link(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        newparent: &Path,
+        newname: &OsStr,
+    ) -> ResultEntry {
         debug!("link: {:?} -> {:?}/{:?}", path, newparent, newname);
 
         let real = self.real_path(path);
         let newreal = PathBuf::from(self.real_path(newparent)).join(newname);
         match fs::hard_link(&real, &newreal) {
-            Ok(()) => {
-                match libc_wrappers::lstat(real.clone()) {
-                    Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
-                    Err(e) => {
-                        error!("lstat after link({:?}, {:?}): {}", real, newreal, e);
-                        Err(e)
-                    },
+            Ok(()) => match libc_wrappers::lstat(real.clone()) {
+                Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
+                Err(e) => {
+                    error!("lstat after link({:?}, {:?}): {}", real, newreal, e);
+                    Err(e)
                 }
             },
             Err(e) => {
                 error!("link({:?}, {:?}): {}", real, newreal, e);
                 Err(e.raw_os_error().unwrap())
-            },
+            }
         }
     }
 
-    fn create(&self, _req: RequestInfo, parent: &Path, name: &OsStr, mode: u32, flags: u32) -> ResultCreate {
-        debug!("create: {:?}/{:?} (mode={:#o}, flags={:#x})", parent, name, mode, flags);
+    fn create(
+        &self,
+        _req: RequestInfo,
+        parent: &Path,
+        name: &OsStr,
+        mode: u32,
+        flags: u32,
+    ) -> ResultCreate {
+        debug!(
+            "create: {:?}/{:?} (mode={:#o}, flags={:#x})",
+            parent, name, mode, flags
+        );
 
         let real = PathBuf::from(self.real_path(parent)).join(name);
         let fd = unsafe {
             let real_c = CString::from_vec_unchecked(real.clone().into_os_string().into_vec());
-            libc::open(real_c.as_ptr(), flags as i32 | libc::O_CREAT | libc::O_EXCL, mode)
+            libc::open(
+                real_c.as_ptr(),
+                flags as i32 | libc::O_CREAT | libc::O_EXCL,
+                mode,
+            )
         };
 
         if -1 == fd {
@@ -596,9 +690,13 @@ impl FilesystemMT for PassthroughFS {
                     flags,
                 }),
                 Err(e) => {
-                    error!("lstat after create({:?}): {}", real, io::Error::from_raw_os_error(e));
+                    error!(
+                        "lstat after create({:?}): {}",
+                        real,
+                        io::Error::from_raw_os_error(e)
+                    );
                     Err(e)
-                },
+                }
             }
         }
     }
@@ -615,7 +713,7 @@ impl FilesystemMT for PassthroughFS {
             data.truncate(nread);
             Ok(Xattr::Data(data))
         } else {
-            let nbytes = libc_wrappers::llistxattr(real, &mut[])?;
+            let nbytes = libc_wrappers::llistxattr(real, &mut [])?;
             Ok(Xattr::Size(nbytes as u32))
         }
     }
@@ -637,8 +735,23 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
-    fn setxattr(&self, _req: RequestInfo, path: &Path, name: &OsStr, value: &[u8], flags: u32, position: u32) -> ResultEmpty {
-        debug!("setxattr: {:?} {:?} {} bytes, flags = {:#x}, pos = {}", path, name, value.len(), flags, position);
+    fn setxattr(
+        &self,
+        _req: RequestInfo,
+        path: &Path,
+        name: &OsStr,
+        value: &[u8],
+        flags: u32,
+        position: u32,
+    ) -> ResultEmpty {
+        debug!(
+            "setxattr: {:?} {:?} {} bytes, flags = {:#x}, pos = {}",
+            path,
+            name,
+            value.len(),
+            flags,
+            position
+        );
         let real = self.real_path(path);
         libc_wrappers::lsetxattr(real, name.to_owned(), value, flags, position)
     }
@@ -660,7 +773,7 @@ impl FilesystemMT for PassthroughFS {
         debug!("getxtimes: {:?}", path);
         let xtimes = XTimes {
             bkuptime: Timespec { sec: 0, nsec: 0 },
-            crtime:   Timespec { sec: 0, nsec: 0 },
+            crtime: Timespec { sec: 0, nsec: 0 },
         };
         Ok(xtimes)
     }
@@ -674,7 +787,7 @@ struct UnmanagedFile {
 impl UnmanagedFile {
     unsafe fn new(fd: u64) -> UnmanagedFile {
         UnmanagedFile {
-            inner: Some(File::from_raw_fd(fd as i32))
+            inner: Some(File::from_raw_fd(fd as i32)),
         }
     }
     fn sync_all(&self) -> io::Result<()> {
