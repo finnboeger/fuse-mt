@@ -1,8 +1,9 @@
 use std::cmp::Ordering;
 use std::path::Path;
+use serde::{Serialize, Deserialize};
 use walkdir::WalkDir;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Entry {
     Dict { name: String, contents: Vec<Entry> },
     File(String),
@@ -110,7 +111,7 @@ pub fn build(path: &str) {
         };
         &parent.add_entry(p).unwrap();
     }
-    println!("{:#?}", root);
+    println!("{}", serde_json::to_string_pretty(&root).unwrap());
 
     // Restore original working directory
     std::env::set_current_dir(working_dir).unwrap();
