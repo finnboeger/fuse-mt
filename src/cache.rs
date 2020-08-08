@@ -122,6 +122,14 @@ pub fn build(src_path: &str, output_path: &str) {
     zip.write(serde_json::to_string_pretty(&root).unwrap().as_bytes())
         .unwrap();
 
+    zip.finish().unwrap();
+
     // Restore original working directory
     std::env::set_current_dir(working_dir).unwrap();
+}
+
+pub fn load(path: &str) -> Entry {
+    let file = File::open(path).unwrap();
+    let mut zip = zip::ZipArchive::new(file).unwrap();
+    serde_json::from_reader(zip.by_name("files.json").unwrap()).unwrap()
 }
