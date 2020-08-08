@@ -34,7 +34,6 @@ impl Entry {
     }
 
     fn add_entry(&mut self, path: &Path) -> Result<(), &str> {
-        //println!("adding {}, is dir: {}", path.display(), path.is_dir());
         match self {
             Entry::File(_) => Err("can't add entry to a file"),
             Entry::Dict { name, contents } => {
@@ -48,9 +47,7 @@ impl Entry {
         if path == Path::new("") {
             return Ok(self);
         }
-        //println!("path: {}", path.display());
         let mut ancestors: Vec<&Path> = path.ancestors().collect();
-        //println!("Ancestors: {:?}", ancestors);
         // Drop last two ancestors which are the root element ('') and '.'
         ancestors.pop();
         ancestors.pop();
@@ -58,7 +55,6 @@ impl Entry {
 
         let mut item = Ok(self);
         for ancestor in ancestors {
-            //println!("Searching for {}, is_dir: {}", ancestor.display(), ancestor.is_dir());
             match item? {
                 Entry::File(_) => item = Err("can't search in a file"),
                 Entry::Dict { name, contents } => {
@@ -70,8 +66,6 @@ impl Entry {
                             Entry::Dict{ name, contents } => name,
                         };
                         // TODO: solve File not Found error when it obviously exists
-                        //println!("contents: {:#?}", contents);
-                        //println!("a: {}, b: {}, cmp: {:?}", a, b, a.cmp(b));
                         b.cmp(&String::from(a))
                     }) {
                         Ok(i) => Ok(&mut contents[i]),
@@ -108,7 +102,6 @@ pub fn build(src_path: &str, output_path: &str) {
     for entry in entries {
         let e = entry.unwrap();
         let p = e.path();
-        //println!("full_path: {}", p.display());
 
         // For a file to be added, the parent has to have been added first so unwrapping should be safe.
         let parent = match p.parent() {
