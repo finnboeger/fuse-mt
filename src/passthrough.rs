@@ -550,9 +550,14 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn fsync(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
-        // TODO: translate file handles. Should be a no-op for cached files
         debug!("fsync: {:?}, data={:?}", path, datasync);
-        let file = unsafe { UnmanagedFile::new(fh) };
+
+        let handle = match self.file_handles.lock().unwrap().find(fh) {
+            Ok(Descriptor::Handle(h)) => *h,
+            _ => return Err(libc::EACCES)
+        };
+
+        let file = unsafe { UnmanagedFile::new(handle) };
 
         if let Err(e) = if datasync {
             file.sync_data()
@@ -687,11 +692,15 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn fsyncdir(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
-        // TODO: translate file handles. Should be a no-op for cached files
         debug!("fsyncdir: {:?} (datasync = {:?})", path, datasync);
 
+        let handle = match self.file_handles.lock().unwrap().find(fh) {
+            Ok(Descriptor::Handle(h)) => *h,
+            _ => return Err(libc::EACCES)
+        };
+
         // TODO: what does datasync mean with regards to a directory handle?
-        let result = unsafe { libc::fsync(fh as libc::c_int) };
+        let result = unsafe { libc::fsync(handle as libc::c_int) };
         if -1 == result {
             let e = io::Error::last_os_error();
             error!("fsyncdir({:?}): {}", path, e);
