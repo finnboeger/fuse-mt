@@ -21,9 +21,9 @@ use crate::stat::*;
 use fuse_mt::*;
 use std::sync::Mutex;
 use time::*;
-use zip::ZipArchive;
 use zip::read::ZipFile;
 use zip::result::ZipError;
+use zip::ZipArchive;
 
 pub struct PassthroughFS {
     target: OsString,
@@ -426,15 +426,31 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
-        // TODO: cache .txt reads
         debug!("open: {:?} flags={:#x}", path, flags);
 
-        let real = self.real_path(path);
-        match libc_wrappers::open(real, flags as libc::c_int) {
-            Ok(fh) => Ok((fh, flags)),
-            Err(e) => {
-                error!("open({:?}): {}", path, io::Error::from_raw_os_error(e));
-                Err(e)
+        match self.files_cache.lock().unwrap().by_name(
+            path_to_rel(path)
+                .strip_prefix(".")
+                .unwrap()
+                .to_str()
+                .unwrap(),
+        ) {
+            Ok(_) => Ok((
+                self.file_handles
+                    .lock()
+                    .unwrap()
+                    .register_handle(Descriptor::new(path)),
+                flags,
+            )),
+            Err(_) => {
+                let real = self.real_path(path);
+                match libc_wrappers::open(real, flags as libc::c_int) {
+                    Ok(fh) => Ok((fh, flags)),
+                    Err(e) => {
+                        error!("open({:?}): {}", path, io::Error::from_raw_os_error(e));
+                        Err(e)
+                    }
+                }
             }
         }
     }
