@@ -147,7 +147,7 @@ pub fn lsetxattr(
     let name_c = into_cstring!(name, "lsetxattr");
 
     // MacOS obnoxiously has an non-standard parameter at the end of their lsetxattr...
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     unsafe fn real(
         path: *const libc::c_char,
         name: *const libc::c_char,
@@ -159,7 +159,7 @@ pub fn lsetxattr(
         libc::lsetxattr(path, name, value, size, flags, position)
     }
 
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "freebsd")))]
     unsafe fn real(
         path: *const libc::c_char,
         name: *const libc::c_char,

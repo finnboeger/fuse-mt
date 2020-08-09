@@ -1,4 +1,4 @@
-use crate::stat::stat_to_fuse;
+use crate::stat::stat_to_fuse_serializable;
 use crate::types::SerializableFileAttr;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
@@ -39,14 +39,14 @@ impl Entry {
             Entry::Dict {
                 name,
                 contents: Vec::new(),
-                stat: SerializableFileAttr::from(stat_to_fuse(
+                stat: stat_to_fuse_serializable(
                     crate::libc_wrappers::lstat(OsString::from(path)).unwrap(),
-                )),
+                ),
             }
         } else {
-            let mut stat = SerializableFileAttr::from(stat_to_fuse(
+            let mut stat = stat_to_fuse_serializable(
                 crate::libc_wrappers::lstat(OsString::from(path)).unwrap(),
-            ));
+            );
             if name.ends_with(".txt") {
                 // remove write permission as files will be read from cache and readonly.
                 stat.perm = stat.perm & 0o5555;
@@ -167,9 +167,9 @@ pub fn build(src_path: &str, output_path: &str) {
     let mut root = Entry::Dict {
         name: String::from("."),
         contents: Vec::new(),
-        stat: SerializableFileAttr::from(stat_to_fuse(
+        stat: stat_to_fuse_serializable(
             crate::libc_wrappers::lstat(OsString::from(".")).unwrap(),
-        )),
+        ),
     };
 
     let pb = ProgressBar::new_spinner();

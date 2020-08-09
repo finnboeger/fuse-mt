@@ -1,4 +1,6 @@
+#[cfg(feature = "mount")]
 use fuse::FileType;
+#[cfg(feature = "mount")]
 use fuse_mt::FileAttr;
 use serde::{Deserialize, Serialize};
 use time::Timespec;
@@ -35,6 +37,7 @@ pub struct SerializableFileAttr {
     pub flags: u32,
 }
 
+#[cfg(feature = "mount")]
 impl From<FileAttr> for SerializableFileAttr {
     fn from(attr: FileAttr) -> Self {
         Self {
@@ -55,6 +58,7 @@ impl From<FileAttr> for SerializableFileAttr {
     }
 }
 
+#[cfg(feature = "mount")]
 impl Into<FileAttr> for SerializableFileAttr {
     fn into(self) -> FileAttr {
         FileAttr {
@@ -94,6 +98,7 @@ pub enum SerializableFileType {
     Socket,
 }
 
+#[cfg(feature = "mount")]
 impl From<FileType> for SerializableFileType {
     fn from(file_type: FileType) -> Self {
         match file_type {
@@ -108,6 +113,7 @@ impl From<FileType> for SerializableFileType {
     }
 }
 
+#[cfg(feature = "mount")]
 impl Into<FileType> for SerializableFileType {
     fn into(self) -> FileType {
         match self {

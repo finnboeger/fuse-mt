@@ -4,6 +4,11 @@ version = "0.1.0"
 authors = ["William R. Fraser <wfraser@codewise.org>"]
 edition = "2018"
 
+[features]
+default = ["mount"]
+
+mount = ["fuse", "fuse_mt"]
+
 [dependencies]
 clap = "2.33.1"
 chrono = "0.4"
@@ -16,5 +21,5 @@ serde = { version = "1.0.114", features = ["derive"] }
 serde_json = "1.0.57"
 time = "0.1"
 zip = "0.5.6"
-fuse_mt = { version = "0.5.0", git = "https://github.com/wfraser/fuse-mt.git" }
-fuse = "0.3.1"
+fuse_mt = { version = "0.5.0", git = "https://github.com/wfraser/fuse-mt.git", optional = true }
+fuse = { version = "0.3.1", optional = true }

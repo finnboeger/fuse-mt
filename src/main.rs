@@ -9,6 +9,7 @@ use chrono::Local;
 use clap::{App, AppSettings, Arg, SubCommand};
 use env_logger::Builder;
 use log::LevelFilter;
+#[cfg(feature = "mount")]
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
 
@@ -19,6 +20,7 @@ mod cache;
 mod file_handles;
 mod libc_extras;
 mod libc_wrappers;
+#[cfg(feature = "mount")]
 mod passthrough;
 mod stat;
 mod types;
@@ -40,12 +42,14 @@ fn main() {
         .filter(None, LevelFilter::Warn)
         .init();
 
-    let matches = App::new("Ultrastar-Fs")
+    let mut app = App::new("Ultrastar-Fs")
         .version("0.1.0")
         .author("Finn Böger <finnboeger@gmail.com>")
         .about("A jump start for ultrastar deluxe when using large song collections and/or slow media")
-        .setting(AppSettings::SubcommandRequiredElseHelp)
-        .subcommand(SubCommand::with_name("mount")
+        .setting(AppSettings::SubcommandRequiredElseHelp);
+
+    #[cfg(feature = "mount")]
+    let app = app.subcommand(SubCommand::with_name("mount")
             .about("Mirrors a given directory while using the cache to speed up i.a. directory listings")
             .arg(Arg::with_name("cache")
                 .short("c")
@@ -59,8 +63,9 @@ fn main() {
                 .required(true))
             .arg(Arg::with_name("target")
                 .help("Sets the mount point.")
-                .required(true)))
-        .subcommand(SubCommand::with_name("build")
+                .required(true)));
+
+    let app = app.subcommand(SubCommand::with_name("build")
             .about("Creates the cache to be used")
             .arg(Arg::with_name("root")
                 .value_name("ROOT_DIR")
@@ -72,10 +77,12 @@ fn main() {
                 .takes_value(true)
                 .value_name("FILE")
                 .default_value("cache.zip")
-                .help("Specify where the created cache file should be saved.")))
-        .get_matches();
+                .help("Specify where the created cache file should be saved.")));
+
+    let matches = app.get_matches();
 
     match matches.subcommand() {
+        #[cfg(feature = "mount")]
         ("mount", Some(sub_matches)) => {
             // TODO: load and use cache
 
@@ -94,7 +101,7 @@ fn main() {
                 &fuse_args,
             )
             .unwrap();
-        }
+        },
         ("build", Some(sub_matches)) => {
             cache::build(
                 sub_matches.value_of("root").unwrap(),

@@ -24,7 +24,7 @@ pub mod libc {
         pub fn truncate64(path: *const c_char, size: off64_t) -> c_int;
 
         // These XATTR functions are missing from the libc crate on Darwin for some reason.
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
         pub fn listxattr(
             path: *const c_char,
             list: *mut c_char,
@@ -32,7 +32,7 @@ pub mod libc {
             options: c_int,
         ) -> ssize_t;
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
         pub fn getxattr(
             path: *const c_char,
             name: *const c_char,
@@ -42,7 +42,7 @@ pub mod libc {
             options: c_int,
         ) -> ssize_t;
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
         pub fn setxattr(
             path: *const c_char,
             name: *const c_char,
@@ -52,7 +52,7 @@ pub mod libc {
             position: u32,
         ) -> c_int;
 
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "freebsd"))]
         pub fn removexattr(path: *const c_char, name: *const c_char, flags: c_int) -> c_int;
     }
 
@@ -60,30 +60,30 @@ pub mod libc {
     // Mac-Linux 64-bit compat
     //
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub type stat64 = stat;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub unsafe fn lstat64(path: *const c_char, stat: *mut stat64) -> c_int {
         lstat(path, stat)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub unsafe fn fstat64(fd: c_int, stat: *mut stat64) -> c_int {
         fstat(fd, stat)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub unsafe fn ftruncate64(fd: c_int, length: i64) -> c_int {
         ftruncate(fd, length as off_t)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub unsafe fn truncate64(path: *const c_char, size: off_t) -> c_int {
         truncate(path, size)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     fn timespec_to_timeval(timespec: &timespec) -> timeval {
         timeval {
             tv_sec: timespec.tv_sec,
@@ -94,7 +94,7 @@ pub mod libc {
     pub const UTIME_OMIT: time_t = (11 << 30) - 21;
 
     // Mac OS X does not support futimens; map it to futimes with lower precision.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub unsafe fn futimens(fd: c_int, times: *const timespec) -> c_int {
         use super::super::libc_wrappers;
         let mut times_osx = [timespec_to_timeval(&*times), timespec_to_timeval(&*times)];
@@ -132,7 +132,7 @@ pub mod libc {
 
     // Mac OS X does not support utimensat; map it to lutimes with lower precision.
     // The relative path feature of utimensat is not supported by this workaround.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub fn utimensat(
         dirfd: c_int,
         path: *const c_char,
@@ -189,22 +189,22 @@ pub mod libc {
     }
 
     // the value is ignored; this is for OS X compat
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub const AT_FDCWD: c_int = -100;
 
     // the value is ignored; this is for OS X compat
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub const AT_SYMLINK_NOFOLLOW: c_int = 0x400;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub const XATTR_NOFOLLOW: c_int = 1;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub unsafe fn llistxattr(path: *const c_char, namebuf: *mut c_char, size: size_t) -> ssize_t {
         listxattr(path, namebuf, size, XATTR_NOFOLLOW)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub unsafe fn lgetxattr(
         path: *const c_char,
         name: *const c_char,
@@ -214,7 +214,7 @@ pub mod libc {
         getxattr(path, name, value, size, 0, XATTR_NOFOLLOW)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub unsafe fn lsetxattr(
         path: *const c_char,
         name: *const c_char,
@@ -226,7 +226,7 @@ pub mod libc {
         setxattr(path, name, value, size, flags | XATTR_NOFOLLOW, position)
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
     pub unsafe fn lremovexattr(path: *const c_char, name: *const c_char) -> c_int {
         removexattr(path, name, XATTR_NOFOLLOW)
     }
