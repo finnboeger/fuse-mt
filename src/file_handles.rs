@@ -5,12 +5,6 @@ pub struct FileHandles {
     open: HashMap<u64, Descriptor>,
 }
 
-// TODO: figure out how read operates on this level and design a structure that works to read the cached .txt files
-pub enum Descriptor {
-    Path(Box<Path>),
-    Handle(u64),
-}
-
 impl FileHandles {
     pub fn new() -> Self {
         unimplemented!()
@@ -30,5 +24,17 @@ impl FileHandles {
 
     pub fn find(&self, handle: u64) -> Result<Descriptor, &str> {
         unimplemented!()
+    }
+}
+
+// TODO: figure out how read operates on this level and design a structure that works to read the cached .txt files
+pub enum Descriptor {
+    Path(String),
+    Handle(u64),
+}
+
+impl Descriptor {
+    pub fn new(path: &Path) -> Self {
+        Self::Path(path.to_str().unwrap().to_string())
     }
 }

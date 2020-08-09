@@ -519,15 +519,12 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn opendir(&self, _req: RequestInfo, path: &Path, _flags: u32) -> ResultOpen {
-        // TODO: use cache
-        let real = self.real_path(path);
-        debug!("opendir: {:?} (flags = {:#o})", real, _flags);
-        match libc_wrappers::opendir(real) {
-            Ok(fh) => Ok((fh, 0)),
+        debug!("opendir: {:?} (flags = {:#o})", path, _flags);
+        match self.struct_cache.find(path_to_rel(path).as_path()) {
+            Ok(_) => Ok((self.file_handles.register_handle(Descriptor::new(path)), 0)),
             Err(e) => {
-                let ioerr = io::Error::from_raw_os_error(e);
-                error!("opendir({:?}): {}", path, ioerr);
-                Err(e)
+                error!("opendir({:?}): {}", path, e);
+                Err(libc::ENOENT)
             }
         }
     }
@@ -543,7 +540,10 @@ impl FilesystemMT for PassthroughFS {
 
         match self.file_handles.find(fh).unwrap() {
             Descriptor::Path(path) => {
-                match self.struct_cache.find(path_to_rel(&path).as_path()) {
+                match self
+                    .struct_cache
+                    .find(path_to_rel(Path::new(path.as_str())).as_path())
+                {
                     Ok(e) => match e {
                         Entry::Dict {
                             name,
