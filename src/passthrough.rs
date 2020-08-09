@@ -497,9 +497,12 @@ impl FilesystemMT for PassthroughFS {
         data: Vec<u8>,
         _flags: u32,
     ) -> ResultWrite {
-        // TODO: translate file handles, fail if cached.
+        let handle = match self.file_handles.lock().unwrap().find(fh) {
+            Ok(Descriptor::Handle(h)) => *h,
+            _ => return Err(libc::EACCES)
+        };
         debug!("write: {:?} {:#x} @ {:#x}", path, data.len(), offset);
-        let mut file = unsafe { UnmanagedFile::new(fh) };
+        let mut file = unsafe { UnmanagedFile::new(handle) };
 
         if let Err(e) = file.seek(SeekFrom::Start(offset)) {
             error!("seek({:?}, {}): {}", path, offset, e);
