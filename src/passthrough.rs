@@ -474,7 +474,7 @@ impl FilesystemMT for PassthroughFS {
                         let name = p.strip_prefix(".").unwrap().to_str().unwrap();
                         let mut buf = Vec::new();
                         // Reads whole file to memory
-                        self.files_cache.lock().unwrap().by_name(name).unwrap().read_to_end(&mut buf);
+                        self.files_cache.lock().unwrap().by_name(name).unwrap().read_to_end(&mut buf).unwrap();
                         let mut file = Cursor::new(buf);
 
                         let mut data = Vec::<u8>::with_capacity(size as usize);
@@ -560,7 +560,7 @@ impl FilesystemMT for PassthroughFS {
 
         let handle = match self.file_handles.lock().unwrap().find(fh) {
             Ok(Descriptor::Handle(h)) => *h,
-            _ => return Err(libc::EACCES)
+            _ => return Ok(())
         };
 
         let mut file = unsafe { UnmanagedFile::new(handle) };
