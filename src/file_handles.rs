@@ -7,23 +7,39 @@ pub struct FileHandles {
 
 impl FileHandles {
     pub fn new() -> Self {
-        unimplemented!()
+        Self {
+            open: HashMap::new(),
+        }
     }
 
     fn find_first_available(&self) -> u64 {
-        unimplemented!()
+        // 0 = stdin, 1 = stdout, 2 = stderr
+        let mut key: u64 = 3;
+
+        while self.open.contains_key(&key) {
+            key += 1;
+        }
+        key
     }
 
-    pub fn register_handle(&self, descriptor: Descriptor) -> u64 {
-        unimplemented!()
+    pub fn register_handle(&mut self, descriptor: Descriptor) -> u64 {
+        let key = self.find_first_available();
+        self.open.insert(key, descriptor);
+        key
     }
 
-    pub fn free_handle(&self, handle: u64) -> Result<(), &str> {
-        unimplemented!()
+    pub fn free_handle(&mut self, handle: u64) -> Result<(), &str> {
+        match self.open.remove(&handle) {
+            None => Err("Handle not found"),
+            Some(_) => Ok(()),
+        }
     }
 
-    pub fn find(&self, handle: u64) -> Result<Descriptor, &str> {
-        unimplemented!()
+    pub fn find(&self, handle: u64) -> Result<&Descriptor, &str> {
+        match self.open.get(&handle) {
+            None => Err("Handle not found"),
+            Some(d) => Ok(d),
+        }
     }
 }
 

@@ -518,7 +518,7 @@ impl FilesystemMT for PassthroughFS {
         Ok(())
     }
 
-    fn opendir(&self, _req: RequestInfo, path: &Path, _flags: u32) -> ResultOpen {
+    fn opendir(&mut self, _req: RequestInfo, path: &Path, _flags: u32) -> ResultOpen {
         debug!("opendir: {:?} (flags = {:#o})", path, _flags);
         match self.struct_cache.find(path_to_rel(path).as_path()) {
             Ok(_) => Ok((self.file_handles.register_handle(Descriptor::new(path)), 0)),
@@ -542,7 +542,7 @@ impl FilesystemMT for PassthroughFS {
             Descriptor::Path(path) => {
                 match self
                     .struct_cache
-                    .find(path_to_rel(Path::new(path.as_str())).as_path())
+                    .find(path_to_rel(Path::new(path)).as_path())
                 {
                     Ok(e) => match e {
                         Entry::Dict {
@@ -575,7 +575,7 @@ impl FilesystemMT for PassthroughFS {
             }
             Descriptor::Handle(handle) => {
                 loop {
-                    match libc_wrappers::readdir(handle) {
+                    match libc_wrappers::readdir(*handle) {
                         Ok(Some(entry)) => {
                             let name_c = unsafe { CStr::from_ptr(entry.d_name.as_ptr()) };
                             let name = OsStr::from_bytes(name_c.to_bytes()).to_owned();
