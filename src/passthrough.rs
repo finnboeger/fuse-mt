@@ -546,10 +546,11 @@ impl FilesystemMT for PassthroughFS {
         }
 
         match self.file_handles.lock().unwrap().find(fh).unwrap() {
-            Descriptor::Path(path) => {
+            Descriptor::Path(s) => {
+                assert_eq!(path, Path::new(&s));
                 match self
                     .struct_cache
-                    .find(path_to_rel(Path::new(&path)).as_path())
+                    .find(path_to_rel(path).as_path())
                 {
                     Ok(e) => match e {
                         Entry::Dict {
