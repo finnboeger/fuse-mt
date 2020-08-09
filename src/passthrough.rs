@@ -468,32 +468,57 @@ impl FilesystemMT for PassthroughFS {
 
         match self.file_handles.lock().unwrap().find(fh) {
             Ok(d) => {
-                let mut file= match d {
+                match d {
                     Descriptor::Path(s) => {
-                        let p = path_to_rel(Path::new(&s)).strip_prefix(".").unwrap().to_str().unwrap();
-                        Cursor::new(self.files_cache.lock().unwrap().by_name(p).unwrap())
+                        let p = path_to_rel(Path::new(s));
+                        let name = p.strip_prefix(".").unwrap().to_str().unwrap();
+                        let mut buf = Vec::new();
+                        // Reads whole file to memory
+                        self.files_cache.lock().unwrap().by_name(name).unwrap().read_to_end(&mut buf);
+                        let mut file = Cursor::new(buf);
+
+                        let mut data = Vec::<u8>::with_capacity(size as usize);
+                        unsafe { data.set_len(size as usize) };
+
+                        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+                            error!("seek({:?}, {}): {}", path, offset, e);
+                            return callback(Err(e.raw_os_error().unwrap()));
+                        }
+                        match file.read(&mut data) {
+                            Ok(n) => {
+                                data.truncate(n);
+                            }
+                            Err(e) => {
+                                error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
+                                return callback(Err(e.raw_os_error().unwrap()));
+                            }
+                        }
+
+                        callback(Ok(&data))
                     },
-                    Descriptor::Handle(handle) => unsafe { UnmanagedFile::new(*handle) },
-                };
+                    Descriptor::Handle(handle) => {
+                        let mut file = unsafe { UnmanagedFile::new(*handle) };
 
-                let mut data = Vec::<u8>::with_capacity(size as usize);
-                unsafe { data.set_len(size as usize) };
+                        let mut data = Vec::<u8>::with_capacity(size as usize);
+                        unsafe { data.set_len(size as usize) };
 
-                if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-                    error!("seek({:?}, {}): {}", path, offset, e);
-                    return callback(Err(e.raw_os_error().unwrap()));
-                }
-                match file.read(&mut data) {
-                    Ok(n) => {
-                        data.truncate(n);
+                        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+                            error!("seek({:?}, {}): {}", path, offset, e);
+                            return callback(Err(e.raw_os_error().unwrap()));
+                        }
+                        match file.read(&mut data) {
+                            Ok(n) => {
+                                data.truncate(n);
+                            }
+                            Err(e) => {
+                                error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
+                                return callback(Err(e.raw_os_error().unwrap()));
+                            }
+                        }
+
+                        callback(Ok(&data))
                     }
-                    Err(e) => {
-                        error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
-                        return callback(Err(e.raw_os_error().unwrap()));
-                    }
                 }
-
-                callback(Ok(&data))
             },
             Err(_) => callback(Err(libc::EBADF)),
         }
