@@ -541,9 +541,12 @@ impl FilesystemMT for PassthroughFS {
         _lock_owner: u64,
         _flush: bool,
     ) -> ResultEmpty {
-        // Todo: translate file handles.
         debug!("release: {:?}", path);
-        libc_wrappers::close(fh)
+        match self.file_handles.lock().unwrap().free_handle(fh) {
+            Ok(Descriptor::Handle(handle)) => libc_wrappers::close(fh),
+            Ok(Descriptor::Path(_)) => Ok(()),
+            Err(_) => Err(libc::EBADF)
+        }
     }
 
     fn fsync(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {

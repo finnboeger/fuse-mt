@@ -28,10 +28,10 @@ impl FileHandles {
         key
     }
 
-    pub fn free_handle(&mut self, handle: u64) -> Result<(), &str> {
+    pub fn free_handle(&mut self, handle: u64) -> Result<Descriptor, &str> {
         match self.open.remove(&handle) {
             None => Err("Handle not found"),
-            Some(_) => Ok(()),
+            Some(d) => Ok(d),
         }
     }
 
