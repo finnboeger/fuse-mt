@@ -188,7 +188,7 @@ impl FilesystemMT for PassthroughFS {
                 Err(_) => return Err(libc::ENOENT),
             }
         } else {
-            match self.files_cache.lock().unwrap().by_name(path.to_str().unwrap()) {
+            match self.files_cache.lock().unwrap().by_name(path_to_rel(path).strip_prefix(".").unwrap().to_str().unwrap()) {
                 Ok(_) => return Err(libc::EACCES),
                 Err(_) => {
                     let real = self.real_path(path);
