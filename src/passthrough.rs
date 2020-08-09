@@ -91,10 +91,24 @@ impl FilesystemMT for PassthroughFS {
         debug!("getattr: {:?}", path);
 
         if let Some(fh) = fh {
-            // TODO: if fh is cached use stat_real
-            match libc_wrappers::fstat(fh) {
-                Ok(stat) => Ok((TTL, stat_to_fuse(stat))),
-                Err(e) => Err(e),
+            match self.file_handles.lock().unwrap().find(fh) {
+                Ok(d) => {
+                    match d {
+                        Descriptor::Path(_) => {
+                            match self.stat_real(path) {
+                                Ok(attr) => Ok((TTL, attr)),
+                                Err(e) => Err(libc::ENOENT),
+                            }
+                        },
+                        Descriptor::Handle(h) => {
+                            match libc_wrappers::fstat(*h) {
+                                Ok(stat) => Ok((TTL, stat_to_fuse(stat))),
+                                Err(e) => Err(e),
+                            }
+                        },
+                    }
+                },
+                Err(_) => Err(libc::ENOENT),
             }
         } else {
             match self.stat_real(path) {
