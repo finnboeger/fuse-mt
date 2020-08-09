@@ -19,6 +19,7 @@ use crate::cache::{load, Entry};
 use crate::file_handles::*;
 use crate::stat::*;
 use fuse_mt::*;
+use std::sync::Mutex;
 use time::*;
 use zip::ZipArchive;
 
@@ -26,7 +27,7 @@ pub struct PassthroughFS {
     target: OsString,
     struct_cache: Entry,
     files_cache: ZipArchive<File>,
-    file_handles: FileHandles,
+    file_handles: Mutex<FileHandles>,
 }
 
 impl PassthroughFS {
@@ -37,7 +38,7 @@ impl PassthroughFS {
             target,
             struct_cache: load(cache_path),
             files_cache: zip,
-            file_handles: FileHandles::new(),
+            file_handles: Mutex::new(FileHandles::new()),
         }
     }
 
@@ -518,10 +519,16 @@ impl FilesystemMT for PassthroughFS {
         Ok(())
     }
 
-    fn opendir(&mut self, _req: RequestInfo, path: &Path, _flags: u32) -> ResultOpen {
+    fn opendir(&self, _req: RequestInfo, path: &Path, _flags: u32) -> ResultOpen {
         debug!("opendir: {:?} (flags = {:#o})", path, _flags);
         match self.struct_cache.find(path_to_rel(path).as_path()) {
-            Ok(_) => Ok((self.file_handles.register_handle(Descriptor::new(path)), 0)),
+            Ok(_) => Ok((
+                self.file_handles
+                    .lock()
+                    .unwrap()
+                    .register_handle(Descriptor::new(path)),
+                0,
+            )),
             Err(e) => {
                 error!("opendir({:?}): {}", path, e);
                 Err(libc::ENOENT)
@@ -538,11 +545,11 @@ impl FilesystemMT for PassthroughFS {
             return Err(libc::EINVAL);
         }
 
-        match self.file_handles.find(fh).unwrap() {
+        match self.file_handles.lock().unwrap().find(fh).unwrap() {
             Descriptor::Path(path) => {
                 match self
                     .struct_cache
-                    .find(path_to_rel(Path::new(path)).as_path())
+                    .find(path_to_rel(Path::new(&path)).as_path())
                 {
                     Ok(e) => match e {
                         Entry::Dict {
