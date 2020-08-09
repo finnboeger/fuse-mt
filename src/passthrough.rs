@@ -548,10 +548,7 @@ impl FilesystemMT for PassthroughFS {
         match self.file_handles.lock().unwrap().find(fh).unwrap() {
             Descriptor::Path(s) => {
                 assert_eq!(path, Path::new(&s));
-                match self
-                    .struct_cache
-                    .find(path_to_rel(path).as_path())
-                {
+                match self.struct_cache.find(path_to_rel(path).as_path()) {
                     Ok(e) => match e {
                         Entry::Dict {
                             name,
@@ -574,12 +571,12 @@ impl FilesystemMT for PassthroughFS {
                                     }),
                                 }
                             }
+                            Ok(entries)
                         }
-                        Entry::File { name, stat } => return Err(libc::ENOTDIR),
+                        Entry::File { name, stat } => Err(libc::ENOTDIR),
                     },
-                    Err(_) => return Err(libc::ENOENT),
-                };
-                Err(0)
+                    Err(_) => Err(libc::ENOENT),
+                }
             }
             Descriptor::Handle(handle) => {
                 loop {
@@ -634,9 +631,22 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn releasedir(&self, _req: RequestInfo, path: &Path, fh: u64, _flags: u32) -> ResultEmpty {
-        // TODO: Cache
         debug!("releasedir: {:?}", path);
-        libc_wrappers::closedir(fh)
+        let mut file_handles = self.file_handles.lock().unwrap();
+        match file_handles.find(fh) {
+            Ok(d) => match d {
+                Descriptor::Path(_) => {
+                    file_handles.free_handle(fh).unwrap();
+                    Ok(())
+                }
+                Descriptor::Handle(h) => {
+                    let handle = h.clone();
+                    file_handles.free_handle(fh).unwrap();
+                    libc_wrappers::closedir(handle)
+                }
+            },
+            Err(_) => Err(libc::EBADF),
+        }
     }
 
     fn fsyncdir(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
