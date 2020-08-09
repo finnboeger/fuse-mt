@@ -543,7 +543,7 @@ impl FilesystemMT for PassthroughFS {
     ) -> ResultEmpty {
         debug!("release: {:?}", path);
         match self.file_handles.lock().unwrap().free_handle(fh) {
-            Ok(Descriptor::Handle(handle)) => libc_wrappers::close(fh),
+            Ok(Descriptor::Handle(handle)) => libc_wrappers::close(handle),
             Ok(Descriptor::Path(_)) => Ok(()),
             Err(_) => Err(libc::EBADF)
         }
