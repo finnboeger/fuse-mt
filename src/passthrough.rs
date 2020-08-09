@@ -22,11 +22,13 @@ use fuse_mt::*;
 use std::sync::Mutex;
 use time::*;
 use zip::ZipArchive;
+use zip::read::ZipFile;
+use zip::result::ZipError;
 
 pub struct PassthroughFS {
     target: OsString,
     struct_cache: Entry,
-    files_cache: ZipArchive<File>,
+    files_cache: Mutex<ZipArchive<File>>,
     file_handles: Mutex<FileHandles>,
 }
 
@@ -37,7 +39,7 @@ impl PassthroughFS {
         Self {
             target,
             struct_cache: load(cache_path),
-            files_cache: zip,
+            files_cache: Mutex::new(zip),
             file_handles: Mutex::new(FileHandles::new()),
         }
     }
@@ -176,16 +178,25 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn truncate(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, size: u64) -> ResultEmpty {
-        // TODO: translate file handles. no-op for
         debug!("truncate: {:?} to {:#x}", path, size);
 
         let result = if let Some(fd) = fh {
-            unsafe { libc::ftruncate64(fd as libc::c_int, size as i64) }
+            match self.file_handles.lock().unwrap().find(fd) {
+                Ok(Descriptor::Handle(h)) => unsafe { libc::ftruncate64(*h as libc::c_int, size as i64) },
+                // TODO: maybe EROFS? How will other files be handled if we return that?
+                Ok(Descriptor::Path(_)) => return Err(libc::EACCES),
+                Err(_) => return Err(libc::ENOENT),
+            }
         } else {
-            let real = self.real_path(path);
-            unsafe {
-                let path_c = CString::from_vec_unchecked(real.into_vec());
-                libc::truncate64(path_c.as_ptr(), size as i64)
+            match self.files_cache.lock().unwrap().by_name(path.to_str().unwrap()) {
+                Ok(_) => return Err(libc::EACCES),
+                Err(_) => {
+                    let real = self.real_path(path);
+                    unsafe {
+                        let path_c = CString::from_vec_unchecked(real.into_vec());
+                        libc::truncate64(path_c.as_ptr(), size as i64)
+                    }
+                },
             }
         };
 
