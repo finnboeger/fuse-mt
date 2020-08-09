@@ -50,10 +50,7 @@ impl Entry {
                 // remove write permission as files will be read from cache and readonly.
                 stat.perm = stat.perm & 0o5555;
             }
-            Entry::File {
-                name,
-                stat,
-            }
+            Entry::File { name, stat }
         }
     }
 

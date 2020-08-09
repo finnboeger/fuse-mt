@@ -1,5 +1,5 @@
-use fuse_mt::{ FileAttr, Statfs };
 use fuse::FileType;
+use fuse_mt::{FileAttr, Statfs};
 use time::Timespec;
 
 pub(crate) fn mode_to_filetype(mode: libc::mode_t) -> FileType {
