@@ -679,19 +679,9 @@ impl FilesystemMT for PassthroughFS {
 
     fn releasedir(&self, _req: RequestInfo, path: &Path, fh: u64, _flags: u32) -> ResultEmpty {
         debug!("releasedir: {:?}", path);
-        let mut file_handles = self.file_handles.lock().unwrap();
-        match file_handles.find(fh) {
-            Ok(d) => match d {
-                Descriptor::Path(_) => {
-                    file_handles.free_handle(fh).unwrap();
-                    Ok(())
-                }
-                Descriptor::Handle(h) => {
-                    let handle = h.clone();
-                    file_handles.free_handle(fh).unwrap();
-                    libc_wrappers::closedir(handle)
-                }
-            },
+        match self.file_handles.lock().unwrap().free_handle(fh) {
+            Ok(Descriptor::Path(_)) => Ok(()),
+            Ok(Descriptor::Handle(handle)) => libc_wrappers::closedir(handle),
             Err(_) => Err(libc::EBADF),
         }
     }
