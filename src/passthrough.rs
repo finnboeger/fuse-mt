@@ -520,9 +520,14 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn flush(&self, _req: RequestInfo, path: &Path, fh: u64, _lock_owner: u64) -> ResultEmpty {
-        // TODO: translate file handles. Should be a no-op for cached files
         debug!("flush: {:?}", path);
-        let mut file = unsafe { UnmanagedFile::new(fh) };
+
+        let handle = match self.file_handles.lock().unwrap().find(fh) {
+            Ok(Descriptor::Handle(h)) => *h,
+            _ => return Err(libc::EACCES)
+        };
+
+        let mut file = unsafe { UnmanagedFile::new(handle) };
 
         if let Err(e) = file.flush() {
             error!("flush({:?}): {}", path, e);
