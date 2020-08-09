@@ -37,7 +37,7 @@ fn main() {
         })
         .filter(Some("fuse_mt"), LevelFilter::Warn)
         .filter(Some("fuse"), LevelFilter::Warn)
-        .filter(None, LevelFilter::Warn)
+        .filter(None, LevelFilter::Debug)
         .init();
 
     let matches = App::new("Ultrastar-Fs")

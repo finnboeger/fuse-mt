@@ -7,7 +7,7 @@
 
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write, Cursor};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
@@ -464,28 +464,39 @@ impl FilesystemMT for PassthroughFS {
         size: u32,
         callback: impl FnOnce(ResultSlice<'_>) -> CallbackResult,
     ) -> CallbackResult {
-        // TODO: cache .txt reads
         debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
-        let mut file = unsafe { UnmanagedFile::new(fh) };
 
-        let mut data = Vec::<u8>::with_capacity(size as usize);
-        unsafe { data.set_len(size as usize) };
+        match self.file_handles.lock().unwrap().find(fh) {
+            Ok(d) => {
+                let mut file= match d {
+                    Descriptor::Path(s) => {
+                        let p = path_to_rel(Path::new(&s)).strip_prefix(".").unwrap().to_str().unwrap();
+                        Cursor::new(self.files_cache.lock().unwrap().by_name(p).unwrap())
+                    },
+                    Descriptor::Handle(handle) => unsafe { UnmanagedFile::new(*handle) },
+                };
 
-        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-            error!("seek({:?}, {}): {}", path, offset, e);
-            return callback(Err(e.raw_os_error().unwrap()));
+                let mut data = Vec::<u8>::with_capacity(size as usize);
+                unsafe { data.set_len(size as usize) };
+
+                if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+                    error!("seek({:?}, {}): {}", path, offset, e);
+                    return callback(Err(e.raw_os_error().unwrap()));
+                }
+                match file.read(&mut data) {
+                    Ok(n) => {
+                        data.truncate(n);
+                    }
+                    Err(e) => {
+                        error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
+                        return callback(Err(e.raw_os_error().unwrap()));
+                    }
+                }
+
+                callback(Ok(&data))
+            },
+            Err(_) => callback(Err(libc::EBADF)),
         }
-        match file.read(&mut data) {
-            Ok(n) => {
-                data.truncate(n);
-            }
-            Err(e) => {
-                error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
-                return callback(Err(e.raw_os_error().unwrap()));
-            }
-        }
-
-        callback(Ok(&data))
     }
 
     fn write(
