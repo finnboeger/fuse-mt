@@ -70,6 +70,10 @@ impl PassthroughFS {
 
 const TTL: Timespec = Timespec { sec: 1, nsec: 0 };
 
+trait ReadSeek: Read + Seek {}
+impl ReadSeek for UnmanagedFile {}
+impl ReadSeek for Cursor<Vec<u8>> {}
+
 fn path_to_rel(path: &Path) -> PathBuf {
     // Hack to change absolute path to relative path because the cache code expects a relative path starting with '.'
     let mut base_str = String::from(".");
@@ -468,57 +472,38 @@ impl FilesystemMT for PassthroughFS {
 
         match self.file_handles.lock().unwrap().find(fh) {
             Ok(d) => {
-                match d {
+                let mut file: Box<dyn ReadSeek> = match d {
                     Descriptor::Path(s) => {
                         let p = path_to_rel(Path::new(s));
                         let name = p.strip_prefix(".").unwrap().to_str().unwrap();
                         let mut buf = Vec::new();
                         // Reads whole file to memory
                         self.files_cache.lock().unwrap().by_name(name).unwrap().read_to_end(&mut buf).unwrap();
-                        let mut file = Cursor::new(buf);
-
-                        let mut data = Vec::<u8>::with_capacity(size as usize);
-                        unsafe { data.set_len(size as usize) };
-
-                        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-                            error!("seek({:?}, {}): {}", path, offset, e);
-                            return callback(Err(e.raw_os_error().unwrap()));
-                        }
-                        match file.read(&mut data) {
-                            Ok(n) => {
-                                data.truncate(n);
-                            }
-                            Err(e) => {
-                                error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
-                                return callback(Err(e.raw_os_error().unwrap()));
-                            }
-                        }
-
-                        callback(Ok(&data))
+                        Box::new(Cursor::new(buf))
                     },
                     Descriptor::Handle(handle) => {
-                        let mut file = unsafe { UnmanagedFile::new(*handle) };
+                        Box::new(unsafe { UnmanagedFile::new(*handle) })
+                    }
+                };
 
-                        let mut data = Vec::<u8>::with_capacity(size as usize);
-                        unsafe { data.set_len(size as usize) };
+                let mut data = Vec::<u8>::with_capacity(size as usize);
+                unsafe { data.set_len(size as usize) };
 
-                        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-                            error!("seek({:?}, {}): {}", path, offset, e);
-                            return callback(Err(e.raw_os_error().unwrap()));
-                        }
-                        match file.read(&mut data) {
-                            Ok(n) => {
-                                data.truncate(n);
-                            }
-                            Err(e) => {
-                                error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
-                                return callback(Err(e.raw_os_error().unwrap()));
-                            }
-                        }
-
-                        callback(Ok(&data))
+                if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+                    error!("seek({:?}, {}): {}", path, offset, e);
+                    return callback(Err(e.raw_os_error().unwrap()));
+                }
+                match file.read(&mut data) {
+                    Ok(n) => {
+                        data.truncate(n);
+                    }
+                    Err(e) => {
+                        error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
+                        return callback(Err(e.raw_os_error().unwrap()));
                     }
                 }
+
+                callback(Ok(&data))
             },
             Err(_) => callback(Err(libc::EBADF)),
         }
