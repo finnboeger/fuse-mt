@@ -1,5 +1,6 @@
 use crate::stat::stat_to_fuse;
 use crate::types::SerializableFileAttr;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::ffi::OsString;
@@ -171,12 +172,19 @@ pub fn build(src_path: &str, output_path: &str) {
         )),
     };
 
+    let pb = ProgressBar::new_spinner();
+    pb.set_style(ProgressStyle::default_spinner().template("{spinner:.green} [{elapsed_precise}] {msg}"));
+    let mut counter = 1;
+
     std::env::set_current_dir(src_path).unwrap();
     let entries = WalkDir::new(".")
         .sort_by(|a, b| a.file_name().cmp(b.file_name()))
         .min_depth(1);
 
     for entry in entries {
+        pb.set_message(&format!("Processed entries: {}", counter));
+        counter += 1;
+
         let e = entry.unwrap();
         let p = e.path();
 
@@ -194,6 +202,8 @@ pub fn build(src_path: &str, output_path: &str) {
             copy(&mut file, &mut zip).unwrap();
         }
     }
+
+    pb.finish();
 
     // Store directory structure
     zip.start_file("files.json", options).unwrap();
