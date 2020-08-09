@@ -6,7 +6,7 @@
 //
 
 use std::ffi::{CStr, CString, OsStr, OsString};
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
@@ -16,6 +16,7 @@ use crate::libc_extras::libc;
 use crate::libc_wrappers;
 
 use crate::cache::{load, Entry};
+use crate::file_handles::*;
 use crate::stat::*;
 use fuse_mt::*;
 use time::*;
@@ -25,6 +26,7 @@ pub struct PassthroughFS {
     target: OsString,
     struct_cache: Entry,
     files_cache: ZipArchive<File>,
+    file_handles: FileHandles,
 }
 
 impl PassthroughFS {
@@ -35,6 +37,7 @@ impl PassthroughFS {
             target,
             struct_cache: load(cache_path),
             files_cache: zip,
+            file_handles: FileHandles::new(),
         }
     }
 
@@ -45,12 +48,9 @@ impl PassthroughFS {
     }
 
     fn stat_real(&self, path: &Path) -> io::Result<FileAttr> {
-        // Hack to change absolute path to relative path because the cache code expects a relative path starting with '.'
-        let mut base_str = String::from(".");
-        base_str.push_str(path.to_str().unwrap());
-        let rel_path = Path::new(&base_str);
+        let rel_path = path_to_rel(path);
 
-        match self.struct_cache.find(rel_path) {
+        match self.struct_cache.find(rel_path.as_path()) {
             Ok(Entry::Dict {
                 name,
                 contents,
@@ -66,6 +66,13 @@ impl PassthroughFS {
 }
 
 const TTL: Timespec = Timespec { sec: 1, nsec: 0 };
+
+fn path_to_rel(path: &Path) -> PathBuf {
+    // Hack to change absolute path to relative path because the cache code expects a relative path starting with '.'
+    let mut base_str = String::from(".");
+    base_str.push_str(path.to_str().unwrap());
+    PathBuf::from(base_str)
+}
 
 // TODO: for all operations that change the file structure (e.g. delete, create, rename, chmod, ..)
 //       and for write operations on cached files return ENOSYS?
@@ -526,7 +533,6 @@ impl FilesystemMT for PassthroughFS {
     }
 
     fn readdir(&self, _req: RequestInfo, path: &Path, fh: u64) -> ResultReaddir {
-        // TODO: use cache
         debug!("readdir: {:?}", path);
         let mut entries: Vec<DirectoryEntry> = vec![];
 
@@ -535,53 +541,88 @@ impl FilesystemMT for PassthroughFS {
             return Err(libc::EINVAL);
         }
 
-        loop {
-            match libc_wrappers::readdir(fh) {
-                Ok(Some(entry)) => {
-                    let name_c = unsafe { CStr::from_ptr(entry.d_name.as_ptr()) };
-                    let name = OsStr::from_bytes(name_c.to_bytes()).to_owned();
-
-                    let filetype = match entry.d_type {
-                        libc::DT_DIR => FileType::Directory,
-                        libc::DT_REG => FileType::RegularFile,
-                        libc::DT_LNK => FileType::Symlink,
-                        libc::DT_BLK => FileType::BlockDevice,
-                        libc::DT_CHR => FileType::CharDevice,
-                        libc::DT_FIFO => FileType::NamedPipe,
-                        libc::DT_SOCK => {
-                            warn!("FUSE doesn't support Socket file type; translating to NamedPipe instead.");
-                            FileType::NamedPipe
-                        }
-                        _ => {
-                            let entry_path = PathBuf::from(path).join(&name);
-                            let real_path = self.real_path(&entry_path);
-                            match libc_wrappers::lstat(real_path) {
-                                Ok(stat64) => mode_to_filetype(stat64.st_mode),
-                                Err(errno) => {
-                                    let ioerr = io::Error::from_raw_os_error(errno);
-                                    panic!("lstat failed after readdir_r gave no file type for {:?}: {}",
-                                           entry_path, ioerr);
+        match self.file_handles.find(fh).unwrap() {
+            Descriptor::Path(path) => {
+                match self.struct_cache.find(path_to_rel(&path).as_path()) {
+                    Ok(e) => match e {
+                        Entry::Dict {
+                            name,
+                            contents,
+                            stat,
+                        } => {
+                            for entry in contents {
+                                match entry {
+                                    Entry::Dict {
+                                        name,
+                                        contents,
+                                        stat,
+                                    } => entries.push(DirectoryEntry {
+                                        name: OsString::from(name),
+                                        kind: stat.kind.into(),
+                                    }),
+                                    Entry::File { name, stat } => entries.push(DirectoryEntry {
+                                        name: OsString::from(name),
+                                        kind: stat.kind.into(),
+                                    }),
                                 }
                             }
                         }
-                    };
+                        Entry::File { name, stat } => return Err(libc::ENOTDIR),
+                    },
+                    Err(_) => return Err(libc::ENOENT),
+                };
+                Err(0)
+            }
+            Descriptor::Handle(handle) => {
+                loop {
+                    match libc_wrappers::readdir(handle) {
+                        Ok(Some(entry)) => {
+                            let name_c = unsafe { CStr::from_ptr(entry.d_name.as_ptr()) };
+                            let name = OsStr::from_bytes(name_c.to_bytes()).to_owned();
 
-                    entries.push(DirectoryEntry {
-                        name,
-                        kind: filetype,
-                    })
+                            let filetype = match entry.d_type {
+                                libc::DT_DIR => FileType::Directory,
+                                libc::DT_REG => FileType::RegularFile,
+                                libc::DT_LNK => FileType::Symlink,
+                                libc::DT_BLK => FileType::BlockDevice,
+                                libc::DT_CHR => FileType::CharDevice,
+                                libc::DT_FIFO => FileType::NamedPipe,
+                                libc::DT_SOCK => {
+                                    warn!("FUSE doesn't support Socket file type; translating to NamedPipe instead.");
+                                    FileType::NamedPipe
+                                }
+                                _ => {
+                                    let entry_path = PathBuf::from(path).join(&name);
+                                    let real_path = self.real_path(&entry_path);
+                                    match libc_wrappers::lstat(real_path) {
+                                        Ok(stat64) => mode_to_filetype(stat64.st_mode),
+                                        Err(errno) => {
+                                            let ioerr = io::Error::from_raw_os_error(errno);
+                                            panic!("lstat failed after readdir_r gave no file type for {:?}: {}",
+                                                   entry_path, ioerr);
+                                        }
+                                    }
+                                }
+                            };
+
+                            entries.push(DirectoryEntry {
+                                name,
+                                kind: filetype,
+                            })
+                        }
+                        Ok(None) => {
+                            break;
+                        }
+                        Err(e) => {
+                            error!("readdir: {:?}: {}", path, e);
+                            return Err(e);
+                        }
+                    }
                 }
-                Ok(None) => {
-                    break;
-                }
-                Err(e) => {
-                    error!("readdir: {:?}: {}", path, e);
-                    return Err(e);
-                }
+
+                Ok(entries)
             }
         }
-
-        Ok(entries)
     }
 
     fn releasedir(&self, _req: RequestInfo, path: &Path, fh: u64, _flags: u32) -> ResultEmpty {
