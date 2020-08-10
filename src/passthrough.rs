@@ -7,7 +7,7 @@
 
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write, Cursor};
+use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::io::{FromRawFd, IntoRawFd};
 use std::path::{Path, PathBuf};
@@ -96,21 +96,15 @@ impl FilesystemMT for PassthroughFS {
 
         if let Some(fh) = fh {
             match self.file_handles.lock().unwrap().find(fh) {
-                Ok(d) => {
-                    match d {
-                        Descriptor::Path(_) => {
-                            match self.stat_real(path) {
-                                Ok(attr) => Ok((TTL, attr)),
-                                Err(_) => Err(libc::ENOENT),
-                            }
-                        },
-                        Descriptor::Handle(h) => {
-                            match libc_wrappers::fstat(*h) {
-                                Ok(stat) => Ok((TTL, stat_to_fuse(stat))),
-                                Err(e) => Err(e),
-                            }
-                        },
-                    }
+                Ok(d) => match d {
+                    Descriptor::Path(_) => match self.stat_real(path) {
+                        Ok(attr) => Ok((TTL, attr)),
+                        Err(_) => Err(libc::ENOENT),
+                    },
+                    Descriptor::Handle(h) => match libc_wrappers::fstat(*h) {
+                        Ok(stat) => Ok((TTL, stat_to_fuse(stat))),
+                        Err(e) => Err(e),
+                    },
                 },
                 Err(_) => Err(libc::ENOENT),
             }
@@ -186,13 +180,21 @@ impl FilesystemMT for PassthroughFS {
 
         let result = if let Some(fd) = fh {
             match self.file_handles.lock().unwrap().find(fd) {
-                Ok(Descriptor::Handle(h)) => unsafe { libc::ftruncate64(*h as libc::c_int, size as i64) },
+                Ok(Descriptor::Handle(h)) => unsafe {
+                    libc::ftruncate64(*h as libc::c_int, size as i64)
+                },
                 // TODO: maybe EROFS? How will other files be handled if we return that?
                 Ok(Descriptor::Path(_)) => return Err(libc::EACCES),
                 Err(_) => return Err(libc::ENOENT),
             }
         } else {
-            match self.files_cache.lock().unwrap().by_name(path_to_rel(path).strip_prefix(".").unwrap().to_str().unwrap()) {
+            match self.files_cache.lock().unwrap().by_name(
+                path_to_rel(path)
+                    .strip_prefix(".")
+                    .unwrap()
+                    .to_str()
+                    .unwrap(),
+            ) {
                 Ok(_) => return Err(libc::EACCES),
                 Err(_) => {
                     let real = self.real_path(path);
@@ -200,7 +202,7 @@ impl FilesystemMT for PassthroughFS {
                         let path_c = CString::from_vec_unchecked(real.into_vec());
                         libc::truncate64(path_c.as_ptr(), size as i64)
                     }
-                },
+                }
             }
         };
 
@@ -492,12 +494,16 @@ impl FilesystemMT for PassthroughFS {
                         let name = p.strip_prefix(".").unwrap().to_str().unwrap();
                         let mut buf = Vec::new();
                         // Reads whole file to memory
-                        self.files_cache.lock().unwrap().by_name(name).unwrap().read_to_end(&mut buf).unwrap();
+                        self.files_cache
+                            .lock()
+                            .unwrap()
+                            .by_name(name)
+                            .unwrap()
+                            .read_to_end(&mut buf)
+                            .unwrap();
                         Box::new(Cursor::new(buf))
-                    },
-                    Descriptor::Handle(handle) => {
-                        Box::new(unsafe { UnmanagedFile::new(*handle) })
                     }
+                    Descriptor::Handle(handle) => Box::new(unsafe { UnmanagedFile::new(*handle) }),
                 };
 
                 let mut data = Vec::<u8>::with_capacity(size as usize);
@@ -518,7 +524,7 @@ impl FilesystemMT for PassthroughFS {
                 }
 
                 callback(Ok(&data))
-            },
+            }
             Err(_) => callback(Err(libc::EBADF)),
         }
     }
@@ -534,7 +540,7 @@ impl FilesystemMT for PassthroughFS {
     ) -> ResultWrite {
         let handle = match self.file_handles.lock().unwrap().find(fh) {
             Ok(Descriptor::Handle(h)) => *h,
-            _ => return Err(libc::EACCES)
+            _ => return Err(libc::EACCES),
         };
         debug!("write: {:?} {:#x} @ {:#x}", path, data.len(), offset);
         let mut file = unsafe { UnmanagedFile::new(handle) };
@@ -559,7 +565,7 @@ impl FilesystemMT for PassthroughFS {
 
         let handle = match self.file_handles.lock().unwrap().find(fh) {
             Ok(Descriptor::Handle(h)) => *h,
-            _ => return Ok(())
+            _ => return Ok(()),
         };
 
         let mut file = unsafe { UnmanagedFile::new(handle) };
@@ -585,7 +591,7 @@ impl FilesystemMT for PassthroughFS {
         match self.file_handles.lock().unwrap().free_handle(fh) {
             Ok(Descriptor::Handle(handle)) => libc_wrappers::close(handle),
             Ok(Descriptor::Path(_)) => Ok(()),
-            Err(_) => Err(libc::EBADF)
+            Err(_) => Err(libc::EBADF),
         }
     }
 
@@ -594,7 +600,7 @@ impl FilesystemMT for PassthroughFS {
 
         let handle = match self.file_handles.lock().unwrap().find(fh) {
             Ok(Descriptor::Handle(h)) => *h,
-            _ => return Err(libc::EACCES)
+            _ => return Err(libc::EACCES),
         };
 
         let file = unsafe { UnmanagedFile::new(handle) };
@@ -736,7 +742,7 @@ impl FilesystemMT for PassthroughFS {
 
         let handle = match self.file_handles.lock().unwrap().find(fh) {
             Ok(Descriptor::Handle(h)) => *h,
-            _ => return Err(libc::EACCES)
+            _ => return Err(libc::EACCES),
         };
 
         // TODO: what does datasync mean with regards to a directory handle?
