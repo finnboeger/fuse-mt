@@ -1,6 +1,8 @@
 use anyhow::{anyhow, Context, Result};
 use crate::stat::stat_to_fuse_serializable;
 use crate::types::SerializableFileAttr;
+#[cfg(feature = "cover")]
+use crate::coverdb::CoverDB;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -158,7 +160,7 @@ fn add_to_coverdb(p: &Path, cover_db: &mut CoverDB) -> Result<()> {
     Ok(())
 }
 
-pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2) -> Result<()> {
+pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, generate_coverdb: bool) -> Result<()> {
     let src_path = src_path.as_ref();
     let output_path = output_path.as_ref();
     assert!(src_path.is_dir());
@@ -178,6 +180,10 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2) ->
                 .with_context(|| format!("Unable to read stats of '{}'", src_path.display()))?,
         ),
     };
+
+    // Create Cache DB
+    #[cfg(feature = "cover")]
+    let mut cover_db = CoverDB::new(src_path).context("Unable to initialize cover.db")?;
 
     let pb = ProgressBar::new_spinner();
     pb.set_style(ProgressStyle::default_spinner().template("{spinner:.green} [{elapsed_precise}] {msg}"));
@@ -209,10 +215,19 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2) ->
         parent.add_entry(p)?;
 
         if p.extension().map_or(false, |x| x == "txt") {
-        // Add to cache if it is a .txt-file
+            // Add to cache if it is a .txt-file
             if let Err(err) = add_txt_to_cache(p, &mut zip, &options) {
                 warn!("Unable to cache '{}': {}", p.display(), err);
                 continue;
+            }
+            
+            // Generate cover db entry, if this is a .txt-file
+            #[cfg(feature = "cover")]
+            if generate_coverdb {
+                if let Err(err) = add_to_coverdb(p, &mut cover_db) {
+                    warn!("Unable to add to cover database '{}': {}", p.display(), err);
+                    continue;
+                }
             }
         }
     }
@@ -223,6 +238,13 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2) ->
     zip.start_file("files.json", options).context("Failed to create 'files.json' in cache.zip")?;
     serde_json::to_writer_pretty(&mut zip, &root).context("Failed to write 'files.json' in cache.zip")?;
 
+    // Store coverdb
+    #[cfg(feature = "cover")]
+    {
+        zip.start_file("cover.db", options).context("Failed to add cover.db to cache.zip")?;
+        cover_db.write(&mut zip).context("Failed to write cover.db to cache.zip")?;
+    }
+    
     zip.finish().context("Failed to finish up cache.zip")?;
 
     // Restore original working directory (if any)

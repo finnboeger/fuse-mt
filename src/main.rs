@@ -16,8 +16,13 @@ use std::io::Write;
 
 #[macro_use]
 extern crate log;
+#[cfg_attr(feature = "cover", macro_use)]
+#[cfg(feature = "cover")]
+extern crate diesel;
 
 mod cache;
+#[cfg(feature = "cover")]
+mod coverdb;
 mod file_handles;
 mod libc_extras;
 mod libc_wrappers;
@@ -65,8 +70,8 @@ fn main() -> Result<()> {
             .arg(Arg::with_name("target")
                 .help("Sets the mount point.")
                 .required(true)));
-
-    let app = app.subcommand(SubCommand::with_name("build")
+    
+    let cache_command = SubCommand::with_name("build")
             .about("Creates the cache to be used")
             .arg(Arg::with_name("root")
                 .value_name("ROOT_DIR")
@@ -78,7 +83,18 @@ fn main() -> Result<()> {
                 .takes_value(true)
                 .value_name("FILE")
                 .default_value("cache.zip")
-                .help("Specify where the created cache file should be saved.")));
+                .help("Specify where the created cache file should be saved."));
+    
+    #[cfg(feature = "cover")]
+    let cache_command = cache_command.arg(Arg::with_name("coverdb")
+        .value_name("COVER_DB")
+        .required(false)
+        .short("c")
+        .long("cover-db")
+        .takes_value(false)
+        .help("creates a relative cover_db file with can be loaded by the mount-command to skip thumbnail generation"));
+            
+    let app = app.subcommand(cache_command);
 
     let matches = app.get_matches();
 
@@ -107,9 +123,14 @@ fn main() -> Result<()> {
             )?
         },
         ("build", Some(sub_matches)) => {
+            #[cfg(not(feature = "cover"))]
+            let cover = false;
+            #[cfg(feature = "cover")]
+            let cover = sub_matches.is_present("coverdb");
             cache::build(
                 sub_matches.value_of("root").expect("'root' is required"),
                 sub_matches.value_of("output").expect("'output' has default value"),
+                cover,
             )?;
         }
         _ => {}
