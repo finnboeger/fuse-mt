@@ -2,8 +2,6 @@
 use fuse::FileType;
 #[cfg(feature = "mount")]
 use fuse_mt::{FileAttr, Statfs};
-#[cfg(feature = "mount")]
-use time::Timespec;
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 use crate::libc_extras::libc;
 use crate::types::{SerializableFileAttr, SerializableTimespec, SerializableFileType};

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // libc_extras :: Functions missing from the libc crate and wrappers for better cross-platform
 //                compatibility.
 //

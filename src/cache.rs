@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{copy, Write};
+use std::io::copy;
 use std::path::Path;
 use walkdir::WalkDir;
 use zip::ZipArchive;
@@ -57,11 +57,11 @@ impl Entry {
 
     fn add_entry(&mut self, path: &Path) -> Result<(), &str> {
         match self {
-            Entry::File { name, stat } => Err("can't add entry to a file"),
+            Entry::File { name: _, stat: _ } => Err("can't add entry to a file"),
             Entry::Dict {
-                name,
+                name: _,
                 contents,
-                stat,
+                stat: _,
             } => {
                 contents.push(Entry::new(path));
                 Ok(())
@@ -82,21 +82,21 @@ impl Entry {
         let mut item = Ok(self);
         for ancestor in ancestors {
             match item? {
-                Entry::File { name, stat } => item = Err("can't search in a file"),
+                Entry::File { name: _, stat: _ } => item = Err("can't search in a file"),
                 Entry::Dict {
-                    name,
+                    name: _,
                     contents,
-                    stat,
+                    stat: _,
                 } => {
                     // We're assuming that all Entries are sorted, therefore we can execute a binary search.
                     item = match contents.binary_search_by(|other: &Entry| -> Ordering {
                         let a = ancestor.file_name().unwrap().to_str().unwrap();
                         let b = match other {
-                            Entry::File { name, stat } => name,
+                            Entry::File { name, stat: _ } => name,
                             Entry::Dict {
                                 name,
-                                contents,
-                                stat,
+                                contents: _,
+                                stat: _,
                             } => name,
                         };
                         // TODO: solve File not Found error when it obviously exists
@@ -124,21 +124,21 @@ impl Entry {
         let mut item = Ok(self);
         for ancestor in ancestors {
             match item? {
-                Entry::File { name, stat } => item = Err("can't search in a file"),
+                Entry::File { name: _, stat: _ } => item = Err("can't search in a file"),
                 Entry::Dict {
-                    name,
+                    name: _,
                     contents,
-                    stat,
+                    stat: _,
                 } => {
                     // We're assuming that all Entries are sorted, therefore we can execute a binary search.
                     item = match contents.binary_search_by(|other: &Entry| -> Ordering {
                         let a = ancestor.file_name().unwrap().to_str().unwrap();
                         let b = match other {
-                            Entry::File { name, stat } => name,
+                            Entry::File { name, stat: _ } => name,
                             Entry::Dict {
                                 name,
-                                contents,
-                                stat,
+                                contents: _,
+                                stat: _,
                             } => name,
                         };
                         // TODO: solve File not Found error when it obviously exists

@@ -42,7 +42,7 @@ fn main() {
         .filter(None, LevelFilter::Warn)
         .init();
 
-    let mut app = App::new("Ultrastar-Fs")
+    let app = App::new("Ultrastar-Fs")
         .version("0.1.0")
         .author("Finn Böger <finnboeger@gmail.com>")
         .about("A jump start for ultrastar deluxe when using large song collections and/or slow media")

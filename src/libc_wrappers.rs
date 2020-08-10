@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // Libc Wrappers :: Safe wrappers around system calls.
 //
 // Copyright (c) 2016-2019 by William R. Fraser

@@ -21,8 +21,6 @@ use crate::stat::*;
 use fuse_mt::*;
 use std::sync::Mutex;
 use time::*;
-use zip::read::ZipFile;
-use zip::result::ZipError;
 use zip::ZipArchive;
 
 pub struct PassthroughFS {
@@ -35,7 +33,7 @@ pub struct PassthroughFS {
 impl PassthroughFS {
     pub fn new(target: OsString, cache_path: &str) -> Self {
         let file = File::open(cache_path).unwrap();
-        let mut zip = zip::ZipArchive::new(file).unwrap();
+        let zip = zip::ZipArchive::new(file).unwrap();
         Self {
             target,
             struct_cache: load(cache_path),
@@ -55,11 +53,11 @@ impl PassthroughFS {
 
         match self.struct_cache.find(rel_path.as_path()) {
             Ok(Entry::Dict {
-                name,
-                contents,
+                name: _,
+                contents: _,
                 stat,
             }) => Ok((*stat).into()),
-            Ok(Entry::File { name, stat }) => Ok((*stat).into()),
+            Ok(Entry::File { name: _, stat }) => Ok((*stat).into()),
             Err(_) => Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "entry not found in cache",
@@ -103,7 +101,7 @@ impl FilesystemMT for PassthroughFS {
                         Descriptor::Path(_) => {
                             match self.stat_real(path) {
                                 Ok(attr) => Ok((TTL, attr)),
-                                Err(e) => Err(libc::ENOENT),
+                                Err(_) => Err(libc::ENOENT),
                             }
                         },
                         Descriptor::Handle(h) => {
@@ -119,11 +117,12 @@ impl FilesystemMT for PassthroughFS {
         } else {
             match self.stat_real(path) {
                 Ok(attr) => Ok((TTL, attr)),
-                Err(e) => Err(libc::ENOENT),
+                Err(_) => Err(libc::ENOENT),
             }
         }
     }
 
+    #[allow(unused_variables)]
     fn chmod(&self, _req: RequestInfo, path: &Path, fh: Option<u64>, mode: u32) -> ResultEmpty {
         // TODO: translate file handles.
         Err(libc::ENOSYS)
@@ -148,6 +147,7 @@ impl FilesystemMT for PassthroughFS {
         } */
     }
 
+    #[allow(unused_variables)]
     fn chown(
         &self,
         _req: RequestInfo,
@@ -213,6 +213,7 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
+    #[allow(unused_variables)]
     fn utimens(
         &self,
         _req: RequestInfo,
@@ -275,6 +276,7 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
+    #[allow(unused_variables)]
     fn mknod(
         &self,
         _req: RequestInfo,
@@ -307,6 +309,7 @@ impl FilesystemMT for PassthroughFS {
         } */
     }
 
+    #[allow(unused_variables)]
     fn mkdir(&self, _req: RequestInfo, parent_path: &Path, name: &OsStr, mode: u32) -> ResultEntry {
         Err(libc::ENOSYS)
         /* debug!("mkdir {:?}/{:?} (mode={:#o})", parent_path, name, mode);
@@ -332,6 +335,7 @@ impl FilesystemMT for PassthroughFS {
         } */
     }
 
+    #[allow(unused_variables)]
     fn unlink(&self, _req: RequestInfo, parent_path: &Path, name: &OsStr) -> ResultEmpty {
         Err(libc::ENOSYS)
         /* debug!("unlink {:?}/{:?}", parent_path, name);
@@ -343,6 +347,7 @@ impl FilesystemMT for PassthroughFS {
         }) */
     }
 
+    #[allow(unused_variables)]
     fn rmdir(&self, _req: RequestInfo, parent_path: &Path, name: &OsStr) -> ResultEmpty {
         Err(libc::ENOSYS)
         /* debug!("rmdir: {:?}/{:?}", parent_path, name);
@@ -354,6 +359,7 @@ impl FilesystemMT for PassthroughFS {
         }) */
     }
 
+    #[allow(unused_variables)]
     fn symlink(
         &self,
         _req: RequestInfo,
@@ -380,6 +386,7 @@ impl FilesystemMT for PassthroughFS {
         } */
     }
 
+    #[allow(unused_variables)]
     fn rename(
         &self,
         _req: RequestInfo,
@@ -402,6 +409,7 @@ impl FilesystemMT for PassthroughFS {
         }) */
     }
 
+    #[allow(unused_variables)]
     fn link(
         &self,
         _req: RequestInfo,
@@ -629,15 +637,15 @@ impl FilesystemMT for PassthroughFS {
                 match self.struct_cache.find(path_to_rel(path).as_path()) {
                     Ok(e) => match e {
                         Entry::Dict {
-                            name,
+                            name: _,
                             contents,
-                            stat,
+                            stat: _,
                         } => {
                             for entry in contents {
                                 match entry {
                                     Entry::Dict {
                                         name,
-                                        contents,
+                                        contents: _,
                                         stat,
                                     } => entries.push(DirectoryEntry {
                                         name: OsString::from(name),
@@ -651,7 +659,7 @@ impl FilesystemMT for PassthroughFS {
                             }
                             Ok(entries)
                         }
-                        Entry::File { name, stat } => Err(libc::ENOTDIR),
+                        Entry::File { name: _, stat: _ } => Err(libc::ENOTDIR),
                     },
                     Err(_) => Err(libc::ENOENT),
                 }
@@ -755,6 +763,7 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
+    #[allow(unused_variables)]
     fn setxattr(
         &self,
         _req: RequestInfo,
@@ -811,6 +820,7 @@ impl FilesystemMT for PassthroughFS {
         }
     }
 
+    #[allow(unused_variables)]
     fn removexattr(&self, _req: RequestInfo, path: &Path, name: &OsStr) -> ResultEmpty {
         Err(libc::ENOSYS)
         /* debug!("removexattr: {:?} {:?}", path, name);
@@ -818,6 +828,7 @@ impl FilesystemMT for PassthroughFS {
         libc_wrappers::lremovexattr(real, name.to_owned()) */
     }
 
+    #[allow(unused_variables)]
     fn create(
         &self,
         _req: RequestInfo,
