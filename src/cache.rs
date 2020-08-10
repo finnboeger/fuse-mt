@@ -207,8 +207,7 @@ pub fn build(src_path: &str, output_path: &str) {
 
     // Store directory structure
     zip.start_file("files.json", options).unwrap();
-    zip.write(serde_json::to_string_pretty(&root).unwrap().as_bytes())
-        .unwrap();
+    serde_json::to_writer_pretty(&mut zip, &root).unwrap();
 
     zip.finish().unwrap();
 
