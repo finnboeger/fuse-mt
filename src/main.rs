@@ -91,6 +91,10 @@ fn main() {
                 sub_matches.value_of("cache").unwrap(),
             );
 
+            println!("Filesystem has been created");
+
+            // TODO: add heuristic to detect ultrastardx startup and display progress bar based on that.
+
             let fuse_args: Vec<&OsStr> = vec![&OsStr::new("-o"), &OsStr::new("auto_unmount")];
 
             let mount_point: OsString = OsString::from(sub_matches.value_of_os("target").unwrap());
