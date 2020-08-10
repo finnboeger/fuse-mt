@@ -457,7 +457,13 @@ impl FilesystemMT for PassthroughFS {
             Err(_) => {
                 let real = self.real_path(path);
                 match libc_wrappers::open(real, flags as libc::c_int) {
-                    Ok(fh) => Ok((fh, flags)),
+                    Ok(fh) => Ok((
+                        self.file_handles
+                            .lock()
+                            .unwrap()
+                            .register_handle(Descriptor::Handle(fh)),
+                        flags,
+                    )),
                     Err(e) => {
                         error!("open({:?}): {}", path, io::Error::from_raw_os_error(e));
                         Err(e)
