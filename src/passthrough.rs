@@ -68,10 +68,6 @@ impl PassthroughFS {
 
 const TTL: Timespec = Timespec { sec: 1, nsec: 0 };
 
-trait ReadSeek: Read + Seek {}
-impl ReadSeek for UnmanagedFile {}
-impl ReadSeek for Cursor<Vec<u8>> {}
-
 fn path_to_rel(path: &Path) -> PathBuf {
     // Hack to change absolute path to relative path because the cache code expects a relative path starting with '.'
     let mut base_str = String::from(".");
@@ -104,6 +100,10 @@ impl FilesystemMT for PassthroughFS {
                     Descriptor::Handle(h) => match libc_wrappers::fstat(*h) {
                         Ok(stat) => Ok((TTL, stat_to_fuse(stat))),
                         Err(e) => Err(e),
+                    },
+                    Descriptor::File { path: _, cursor: _ } => match self.stat_real(path) {
+                        Ok(attr) => Ok((TTL, attr)),
+                        Err(_) => Err(libc::ENOENT),
                     },
                 },
                 Err(_) => Err(libc::ENOENT),
@@ -186,6 +186,7 @@ impl FilesystemMT for PassthroughFS {
                 // TODO: maybe EROFS? How will other files be handled if we return that?
                 Ok(Descriptor::Path(_)) => return Err(libc::EACCES),
                 Err(_) => return Err(libc::ENOENT),
+                Ok(Descriptor::File { path: _, cursor: _ }) => return Err(libc::EACCES),
             }
         } else {
             match self.files_cache.lock().unwrap().by_name(
@@ -449,13 +450,29 @@ impl FilesystemMT for PassthroughFS {
                 .to_str()
                 .unwrap(),
         ) {
-            Ok(_) => Ok((
-                self.file_handles
+            Ok(_) => {
+                let p = path_to_rel(Path::new(path));
+                let name = p.strip_prefix(".").unwrap().to_str().unwrap();
+                let mut buf = Vec::new();
+                // Reads whole file to memory
+                self.files_cache
                     .lock()
                     .unwrap()
-                    .register_handle(Descriptor::new(path)),
-                flags,
-            )),
+                    .by_name(name)
+                    .unwrap()
+                    .read_to_end(&mut buf)
+                    .unwrap();
+                Ok((
+                    self.file_handles
+                        .lock()
+                        .unwrap()
+                        .register_handle(Descriptor::File {
+                            path: path.to_str().unwrap().to_string(),
+                            cursor: Cursor::new(buf),
+                        }),
+                    flags,
+                ))
+            }
             Err(_) => {
                 let real = self.real_path(path);
                 match libc_wrappers::open(real, flags as libc::c_int) {
@@ -486,45 +503,51 @@ impl FilesystemMT for PassthroughFS {
     ) -> CallbackResult {
         debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
 
-        match self.file_handles.lock().unwrap().find(fh) {
-            Ok(d) => {
-                let mut file: Box<dyn ReadSeek> = match d {
-                    Descriptor::Path(s) => {
-                        let p = path_to_rel(Path::new(s));
-                        let name = p.strip_prefix(".").unwrap().to_str().unwrap();
-                        let mut buf = Vec::new();
-                        // Reads whole file to memory
-                        self.files_cache
-                            .lock()
-                            .unwrap()
-                            .by_name(name)
-                            .unwrap()
-                            .read_to_end(&mut buf)
-                            .unwrap();
-                        Box::new(Cursor::new(buf))
-                    }
-                    Descriptor::Handle(handle) => Box::new(unsafe { UnmanagedFile::new(*handle) }),
-                };
+        match self.file_handles.lock().unwrap().find_mut(fh) {
+            Ok(d) => match d {
+                Descriptor::Path(_) => return callback(Err(libc::EISDIR)),
+                Descriptor::Handle(handle) => {
+                    let mut file = unsafe { UnmanagedFile::new(*handle) };
+                    let mut data = Vec::<u8>::with_capacity(size as usize);
+                    unsafe { data.set_len(size as usize) };
 
-                let mut data = Vec::<u8>::with_capacity(size as usize);
-                unsafe { data.set_len(size as usize) };
-
-                if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-                    error!("seek({:?}, {}): {}", path, offset, e);
-                    return callback(Err(e.raw_os_error().unwrap()));
-                }
-                match file.read(&mut data) {
-                    Ok(n) => {
-                        data.truncate(n);
-                    }
-                    Err(e) => {
-                        error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
+                    if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+                        error!("seek({:?}, {}): {}", path, offset, e);
                         return callback(Err(e.raw_os_error().unwrap()));
                     }
-                }
+                    match file.read(&mut data) {
+                        Ok(n) => {
+                            data.truncate(n);
+                        }
+                        Err(e) => {
+                            error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
+                            return callback(Err(e.raw_os_error().unwrap()));
+                        }
+                    }
 
-                callback(Ok(&data))
-            }
+                    callback(Ok(&data))
+                }
+                Descriptor::File { path: _, cursor } => {
+                    let mut data = Vec::<u8>::with_capacity(size as usize);
+                    unsafe { data.set_len(size as usize) };
+
+                    if let Err(e) = cursor.seek(SeekFrom::Start(offset)) {
+                        error!("seek({:?}, {}): {}", path, offset, e);
+                        return callback(Err(e.raw_os_error().unwrap()));
+                    }
+                    match cursor.read(&mut data) {
+                        Ok(n) => {
+                            data.truncate(n);
+                        }
+                        Err(e) => {
+                            error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
+                            return callback(Err(e.raw_os_error().unwrap()));
+                        }
+                    }
+
+                    callback(Ok(&data))
+                }
+            },
             Err(_) => callback(Err(libc::EBADF)),
         }
     }
@@ -578,6 +601,7 @@ impl FilesystemMT for PassthroughFS {
         Ok(())
     }
 
+    // TODO: should fail if called on a dir
     fn release(
         &self,
         _req: RequestInfo,
@@ -589,6 +613,7 @@ impl FilesystemMT for PassthroughFS {
     ) -> ResultEmpty {
         debug!("release: {:?}", path);
         match self.file_handles.lock().unwrap().free_handle(fh) {
+            Ok(Descriptor::File { path: _, cursor: _ }) => Ok(()),
             Ok(Descriptor::Handle(handle)) => libc_wrappers::close(handle),
             Ok(Descriptor::Path(_)) => Ok(()),
             Err(_) => Err(libc::EBADF),
@@ -725,14 +750,17 @@ impl FilesystemMT for PassthroughFS {
 
                 Ok(entries)
             }
+            Descriptor::File { path: _, cursor: _ } => Err(libc::ENOTDIR),
         }
     }
 
+    // TODO: should fail if called on a non-dir
     fn releasedir(&self, _req: RequestInfo, path: &Path, fh: u64, _flags: u32) -> ResultEmpty {
         debug!("releasedir: {:?}", path);
         match self.file_handles.lock().unwrap().free_handle(fh) {
             Ok(Descriptor::Path(_)) => Ok(()),
             Ok(Descriptor::Handle(handle)) => libc_wrappers::closedir(handle),
+            Ok(Descriptor::File { path: _, cursor: _ }) => Ok(()),
             Err(_) => Err(libc::EBADF),
         }
     }
