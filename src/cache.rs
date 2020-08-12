@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Context, Result};
 use crate::stat::stat_to_fuse_serializable;
 use crate::types::SerializableFileAttr;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -13,28 +14,24 @@ use zip::ZipArchive;
 #[derive(Debug, Serialize, Deserialize)]
 pub enum Entry {
     Dict {
-        name: String,
+        name: OsString,
         contents: Vec<Entry>,
         stat: SerializableFileAttr,
     },
     File {
-        name: String,
+        name: OsString,
         stat: SerializableFileAttr,
     },
 }
 
 impl Entry {
-    pub fn new(path: &Path) -> Self {
-        // TODO: Error handling if either path has no file_name or can't be converted to string.
-        //       Maybe change Entry to use OsStr?
-        let name = String::from(
-            path.file_name()
-                .ok_or("no file name")
-                .unwrap()
-                .to_str()
-                .ok_or("invalid file name")
-                .unwrap(),
-        );
+    fn new(path: &Path) -> Self {
+        // path needs to have a filename, otherwise we got a root, which is useless.
+        // This function is private and the api would be annoying otherwise,
+        // so we just require this.
+        let name = path.file_name()
+            .expect("Entry::new got a root")
+            .to_os_string();
         if path.is_dir() {
             Entry::Dict {
                 name,
@@ -47,7 +44,7 @@ impl Entry {
             let mut stat = stat_to_fuse_serializable(
                 crate::libc_wrappers::lstat(OsString::from(path)).unwrap(),
             );
-            if name.ends_with(".txt") {
+            if path.extension().map_or(false, |x| x == "txt") {
                 // remove write permission as files will be read from cache and readonly.
                 stat.perm = stat.perm & 0o5555;
             }
@@ -55,9 +52,9 @@ impl Entry {
         }
     }
 
-    fn add_entry(&mut self, path: &Path) -> Result<(), &str> {
+    fn add_entry(&mut self, path: &Path) -> Result<()> {
         match self {
-            Entry::File { name: _, stat: _ } => Err("can't add entry to a file"),
+            Entry::File { name: _, stat: _ } => Err(anyhow!("Can't add entry to a file")),
             Entry::Dict {
                 name: _,
                 contents,
@@ -69,20 +66,15 @@ impl Entry {
         }
     }
 
-    pub fn find(&self, path: &Path) -> Result<&Entry, &str> {
+    pub fn find(&self, path: &Path) -> Result<&Entry> {
         if path == Path::new("") {
             return Ok(self);
         }
-        let mut ancestors: Vec<&Path> = path.ancestors().collect();
-        // Drop last two ancestors which are the root element ('') and '.'
-        ancestors.pop();
-        ancestors.pop();
-        ancestors.reverse();
 
-        let mut item = Ok(self);
-        for ancestor in ancestors {
-            match item? {
-                Entry::File { name: _, stat: _ } => item = Err("can't search in a file"),
+        let mut item = self;
+        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
+            match item {
+                Entry::File { name: _, stat: _ } => return Err(anyhow!("Can't search in a file")),
                 Entry::Dict {
                     name: _,
                     contents,
@@ -90,7 +82,7 @@ impl Entry {
                 } => {
                     // We're assuming that all Entries are sorted, therefore we can execute a binary search.
                     item = match contents.binary_search_by(|other: &Entry| -> Ordering {
-                        let a = ancestor.file_name().unwrap().to_str().unwrap();
+                        let a = ancestor.file_name().expect("Entry::find requires relative path");
                         let b = match other {
                             Entry::File { name, stat: _ } => name,
                             Entry::Dict {
@@ -100,31 +92,26 @@ impl Entry {
                             } => name,
                         };
                         // TODO: solve File not Found error when it obviously exists
-                        b.cmp(&String::from(a))
+                        (**b).cmp(a)
                     }) {
-                        Ok(i) => Ok(&contents[i]),
-                        Err(_) => Err("File not found"),
+                        Ok(i) => &contents[i],
+                        Err(_) => return Err(anyhow!("File not found")),
                     };
                 }
             }
         }
-        item
+        Ok(item)
     }
 
-    fn find_mut(&mut self, path: &Path) -> Result<&mut Entry, &str> {
+    fn find_mut(&mut self, path: &Path) -> Result<&mut Entry> {
         if path == Path::new("") {
             return Ok(self);
         }
-        let mut ancestors: Vec<&Path> = path.ancestors().collect();
-        // Drop last two ancestors which are the root element ('') and '.'
-        ancestors.pop();
-        ancestors.pop();
-        ancestors.reverse();
 
-        let mut item = Ok(self);
-        for ancestor in ancestors {
-            match item? {
-                Entry::File { name: _, stat: _ } => item = Err("can't search in a file"),
+        let mut item = self;
+        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
+            match item {
+                Entry::File { name: _, stat: _ } => return Err(anyhow!("Can't search in a file")),
                 Entry::Dict {
                     name: _,
                     contents,
@@ -132,7 +119,7 @@ impl Entry {
                 } => {
                     // We're assuming that all Entries are sorted, therefore we can execute a binary search.
                     item = match contents.binary_search_by(|other: &Entry| -> Ordering {
-                        let a = ancestor.file_name().unwrap().to_str().unwrap();
+                        let a = ancestor.file_name().expect("Entry::find_mut requires relative path");
                         let b = match other {
                             Entry::File { name, stat: _ } => name,
                             Entry::Dict {
@@ -142,33 +129,53 @@ impl Entry {
                             } => name,
                         };
                         // TODO: solve File not Found error when it obviously exists
-                        b.cmp(&String::from(a))
+                        (**b).cmp(a)
                     }) {
-                        Ok(i) => Ok(&mut contents[i]),
-                        Err(_) => Err("File not found"),
+                        Ok(i) => &mut contents[i],
+                        Err(_) => return Err(anyhow!("File not found")),
                     };
                 }
             }
         }
-        item
+        Ok(item)
     }
 }
 
-//TODO: Error handling
-pub fn build(src_path: &str, output_path: &str) {
-    // TODO: assert path is a directory
-    let working_dir = std::env::current_dir().unwrap();
+fn add_txt_to_cache(p: &Path, mut zip: &mut zip::ZipWriter<File>, options: &zip::write::FileOptions) -> Result<()> {
+    zip.start_file_from_path(p, *options).context("Failed to start zip file")?;
+    let mut file = File::open(p)?;
+    copy(&mut file, &mut zip).context("Failed to copy into cache")?;
+    Ok(())
+}
 
-    let zip_file = File::create(output_path).unwrap();
+#[cfg(feature = "cover")]
+fn add_to_coverdb(p: &Path, cover_db: &mut CoverDB) -> Result<()> {
+    // ultrastar-txt's errors are not Sync, which anyhow needs
+    let txt = ultrastar_txt::parse_txt_song(p).map_err(|err| anyhow!("Unable to parse song file: {}", err))?;
+    if let Some(cover_path) = txt.header.cover_path {
+        cover_db.add(&cover_path).with_context(|| format!("Failed to load cover '{}' into db", cover_path.display()))?;
+    }
+    Ok(())
+}
+
+pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2) -> Result<()> {
+    let src_path = src_path.as_ref();
+    let output_path = output_path.as_ref();
+    assert!(src_path.is_dir());
+    let working_dir = std::env::current_dir();
+
+    let zip_file = File::create(output_path).context("Unable to create cache.zip")?;
     let mut zip = zip::ZipWriter::new(zip_file);
     let options = zip::write::FileOptions::default();
 
     // Create root
     let mut root = Entry::Dict {
-        name: String::from("."),
+        name: OsString::from("."),
         contents: Vec::new(),
         stat: stat_to_fuse_serializable(
-            crate::libc_wrappers::lstat(OsString::from(".")).unwrap(),
+            crate::libc_wrappers::lstat(OsString::from(src_path))
+                .map_err(|errno| std::io::Error::from_raw_os_error(errno))
+                .with_context(|| format!("Unable to read stats of '{}'", src_path.display()))?,
         ),
     };
 
@@ -176,7 +183,7 @@ pub fn build(src_path: &str, output_path: &str) {
     pb.set_style(ProgressStyle::default_spinner().template("{spinner:.green} [{elapsed_precise}] {msg}"));
     let mut counter = 1;
 
-    std::env::set_current_dir(src_path).unwrap();
+    std::env::set_current_dir(src_path).with_context(|| format!("Unable to change current_dir to '{}'", src_path.display()))?;
     let entries = WalkDir::new(".")
         .sort_by(|a, b| a.file_name().cmp(b.file_name()))
         .min_depth(1);
@@ -185,42 +192,56 @@ pub fn build(src_path: &str, output_path: &str) {
         pb.set_message(&format!("Processed entries: {}", counter));
         counter += 1;
 
-        let e = entry.unwrap();
+        let e = match entry {
+            Ok(e) => e,
+            Err(err) => {
+                warn!("Unable to process: '{}'", err);
+                continue;
+            }
+        };
         let p = e.path();
 
         // For a file to be added, the parent has to have been added first so unwrapping should be safe.
         let parent = match p.parent() {
             None => &mut root,
-            Some(x) => root.find_mut(x).unwrap(),
+            Some(x) => root.find_mut(x)?,
         };
-        &parent.add_entry(p).unwrap();
+        parent.add_entry(p)?;
 
+        if p.extension().map_or(false, |x| x == "txt") {
         // Add to cache if it is a .txt-file
-        if p.file_name().unwrap().to_str().unwrap().ends_with(".txt") {
-            zip.start_file_from_path(p, options).unwrap();
-            let mut file = File::open(p).unwrap();
-            copy(&mut file, &mut zip).unwrap();
+            if let Err(err) = add_txt_to_cache(p, &mut zip, &options) {
+                warn!("Unable to cache '{}': {}", p.display(), err);
+                continue;
+            }
         }
     }
 
     pb.finish();
 
     // Store directory structure
-    zip.start_file("files.json", options).unwrap();
-    serde_json::to_writer_pretty(&mut zip, &root).unwrap();
+    zip.start_file("files.json", options).context("Failed to create 'files.json' in cache.zip")?;
+    serde_json::to_writer_pretty(&mut zip, &root).context("Failed to write 'files.json' in cache.zip")?;
 
-    zip.finish().unwrap();
+    zip.finish().context("Failed to finish up cache.zip")?;
 
-    // Restore original working directory
-    std::env::set_current_dir(working_dir).unwrap();
+    // Restore original working directory (if any)
+    if let Ok(working_dir) = working_dir {
+        // ignore failure
+        let _ = std::env::set_current_dir(working_dir);
+    }
+
+    Ok(())
 }
 
-pub fn load(path: &str) -> Entry {
-    let file = File::open(path).unwrap();
-    let mut zip = zip::ZipArchive::new(file).unwrap();
-    serde_json::from_reader(zip.by_name("files.json").unwrap()).unwrap()
+pub fn load(path: &Path) -> Result<Entry> {
+    let file = File::open(path).context("Failed to load cache")?;
+    let mut zip = zip::ZipArchive::new(file).context("Failed to open cache as zip archive")?;
+    load_from_zip(&mut zip)
 }
 
-pub fn load_from_zip(zip: &mut ZipArchive<File>) -> Entry {
-    serde_json::from_reader(zip.by_name("files.json").unwrap()).unwrap()
+pub fn load_from_zip(zip: &mut ZipArchive<File>) -> Result<Entry> {
+    serde_json::from_reader(
+        zip.by_name("files.json").context("Cache contains no files.json / is malformed")?)
+    .context("files.json is no valid json").into()
 }

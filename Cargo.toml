@@ -10,6 +10,7 @@ default = ["mount"]
 mount = ["fuse", "fuse_mt"]
 
 [dependencies]
+anyhow = "1"
 clap = "2.33.1"
 chrono = "0.4"
 env_logger = "0.7.1"

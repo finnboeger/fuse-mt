@@ -4,6 +4,7 @@
 //
 // Copyright (c) 2016-2020 by William R. Fraser
 //
+use anyhow::{Context, Result};
 
 use std::ffi::{CStr, CString, OsStr, OsString};
 use std::fs::File;
@@ -31,27 +32,26 @@ pub struct PassthroughFS {
 }
 
 impl PassthroughFS {
-    pub fn new(target: OsString, cache_path: &str) -> Self {
-        let file = File::open(cache_path).unwrap();
-        let zip = zip::ZipArchive::new(file).unwrap();
-        Self {
+    pub fn new<P: AsRef<Path>>(target: OsString, cache_path: P) -> Result<Self> {
+        let cache_path = cache_path.as_ref();
+        let file = File::open(cache_path).with_context(|| format!("Failed to open cache zip at '{}'", cache_path.display()))?;
+        let zip = zip::ZipArchive::new(file).context("Failed to parse cache file as zip")?;
+        Ok(Self {
             target,
-            struct_cache: load(cache_path),
+            struct_cache: load(cache_path).context("Unable to load cache")?,
             files_cache: Mutex::new(zip),
             file_handles: Mutex::new(FileHandles::new()),
-        }
+        })
     }
 
     fn real_path(&self, partial: &Path) -> OsString {
         PathBuf::from(&self.target)
-            .join(partial.strip_prefix("/").unwrap())
+            .join(path_to_rel(partial))
             .into_os_string()
     }
 
     fn stat_real(&self, path: &Path) -> io::Result<FileAttr> {
-        let rel_path = path_to_rel(path);
-
-        match self.struct_cache.find(rel_path.as_path()) {
+        match self.struct_cache.find(path_to_rel(path)) {
             Ok(Entry::Dict {
                 name: _,
                 contents: _,
@@ -72,11 +72,12 @@ trait ReadSeek: Read + Seek {}
 impl ReadSeek for UnmanagedFile {}
 impl ReadSeek for Cursor<Vec<u8>> {}
 
-fn path_to_rel(path: &Path) -> PathBuf {
-    // Hack to change absolute path to relative path because the cache code expects a relative path starting with '.'
-    let mut base_str = String::from(".");
-    base_str.push_str(path.to_str().unwrap());
-    PathBuf::from(base_str)
+fn path_to_rel(path: &Path) -> &Path {
+    if path.starts_with("/") {
+        path.strip_prefix("/").unwrap()
+    } else if path.starts_with("./") {
+        path.strip_prefix("./").unwrap()
+    } else { path }
 }
 
 // TODO: for all operations that change the file structure (e.g. delete, create, rename, chmod, ..)
@@ -146,22 +147,18 @@ impl FilesystemMT for PassthroughFS {
                 Err(_) => return Err(libc::ENOENT),
             }
         } else {
-            match self.files_cache.lock().unwrap().by_name(
-                path_to_rel(path)
-                    .strip_prefix(".")
-                    .unwrap()
-                    .to_str()
-                    .unwrap(),
-            ) {
-                Ok(_) => return Err(libc::EACCES),
-                Err(_) => {
+            let mut zip = self.files_cache.lock().unwrap();
+            let result = match path_to_rel(path).to_str().map(|x| zip.by_name(x)).transpose() {
+                Err(_) | Ok(None) => {
                     let real = self.real_path(path);
                     unsafe {
                         let path_c = CString::from_vec_unchecked(real.into_vec());
                         libc::truncate64(path_c.as_ptr(), size as i64)
                     }
                 }
-            }
+                Ok(_) => return Err(libc::EACCES),
+            };
+            result
         };
 
         if -1 == result {
@@ -254,43 +251,14 @@ impl FilesystemMT for PassthroughFS {
         newname: &OsStr,
     ) -> ResultEntry {
         Err(libc::ENOSYS)
-        /* debug!("link: {:?} -> {:?}/{:?}", path, newparent, newname);
-
-        let real = self.real_path(path);
-        let newreal = PathBuf::from(self.real_path(newparent)).join(newname);
-        match fs::hard_link(&real, &newreal) {
-            Ok(()) => match libc_wrappers::lstat(real.clone()) {
-                Ok(attr) => Ok((TTL, stat_to_fuse(attr))),
-                Err(e) => {
-                    error!("lstat after link({:?}, {:?}): {}", real, newreal, e);
-                    Err(e)
-                }
-            },
-            Err(e) => {
-                error!("link({:?}, {:?}): {}", real, newreal, e);
-                Err(e.raw_os_error().unwrap())
-            }
-        } */
     }
 
     fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
         debug!("open: {:?} flags={:#x}", path, flags);
-
-        match self.files_cache.lock().unwrap().by_name(
-            path_to_rel(path)
-                .strip_prefix(".")
-                .unwrap()
-                .to_str()
-                .unwrap(),
-        ) {
-            Ok(_) => Ok((
-                self.file_handles
-                    .lock()
-                    .unwrap()
-                    .register_handle(Descriptor::new(path)),
-                flags,
-            )),
-            Err(_) => {
+        
+        let mut zip = self.files_cache.lock().unwrap();
+        let result = match path_to_rel(path).to_str().map(|x| zip.by_name(x)).transpose() {
+            Err(_) | Ok(None) => {
                 let real = self.real_path(path);
                 match libc_wrappers::open(real, flags as libc::c_int) {
                     Ok(fh) => Ok((
@@ -305,8 +273,16 @@ impl FilesystemMT for PassthroughFS {
                         Err(e)
                     }
                 }
-            }
-        }
+            },
+            Ok(_) => Ok((
+                self.file_handles
+                    .lock()
+                    .unwrap()
+                    .register_handle(Descriptor::new(path)),
+                flags,
+            )),
+        };
+        result
     }
 
     fn read(
@@ -323,18 +299,17 @@ impl FilesystemMT for PassthroughFS {
         match self.file_handles.lock().unwrap().find(fh) {
             Ok(d) => {
                 let mut file: Box<dyn ReadSeek> = match d {
-                    Descriptor::Path(s) => {
-                        let p = path_to_rel(Path::new(s));
-                        let name = p.strip_prefix(".").unwrap().to_str().unwrap();
+                    Descriptor::Path(path) => {
+                        let p = path_to_rel(path);
                         let mut buf = Vec::new();
                         // Reads whole file to memory
                         self.files_cache
                             .lock()
                             .unwrap()
-                            .by_name(name)
-                            .unwrap()
+                            .by_name(p.to_str().expect("We already opened the file, we can convert the path to a string"))
+                            .expect("We already opened the file, it must exist in the zip")
                             .read_to_end(&mut buf)
-                            .unwrap();
+                            .expect("Zip cache was forcefully closed?");
                         Box::new(Cursor::new(buf))
                     }
                     Descriptor::Handle(handle) => Box::new(unsafe { UnmanagedFile::new(*handle) }),
@@ -453,7 +428,7 @@ impl FilesystemMT for PassthroughFS {
 
     fn opendir(&self, _req: RequestInfo, path: &Path, _flags: u32) -> ResultOpen {
         debug!("opendir: {:?} (flags = {:#o})", path, _flags);
-        match self.struct_cache.find(path_to_rel(path).as_path()) {
+        match self.struct_cache.find(path_to_rel(path)) {
             Ok(_) => Ok((
                 self.file_handles
                     .lock()
@@ -480,7 +455,7 @@ impl FilesystemMT for PassthroughFS {
         match self.file_handles.lock().unwrap().find(fh).unwrap() {
             Descriptor::Path(s) => {
                 assert_eq!(path, Path::new(&s));
-                match self.struct_cache.find(path_to_rel(path).as_path()) {
+                match self.struct_cache.find(path_to_rel(path)) {
                     Ok(e) => match e {
                         Entry::Dict {
                             name: _,

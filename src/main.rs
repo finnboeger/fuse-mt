@@ -5,6 +5,7 @@
 
 #![deny(rust_2018_idioms)]
 
+use anyhow::{Context, Result};
 use chrono::Local;
 use clap::{App, AppSettings, Arg, SubCommand};
 use env_logger::Builder;
@@ -25,7 +26,7 @@ mod passthrough;
 mod stat;
 mod types;
 
-fn main() {
+fn main() -> Result<()> {
     Builder::new()
         .format(|buf, record| {
             writeln!(
@@ -87,9 +88,9 @@ fn main() {
             // TODO: load and use cache
 
             let filesystem = passthrough::PassthroughFS::new(
-                OsString::from(sub_matches.value_of_os("source").unwrap()),
-                sub_matches.value_of("cache").unwrap(),
-            );
+                sub_matches.value_of_os("source").expect("'source' is required").into(),
+                sub_matches.value_of("cache").expect("'cache' has default"),
+            ).context("Unable to load filesystem")?;
 
             println!("Filesystem has been created");
 
@@ -97,21 +98,22 @@ fn main() {
 
             let fuse_args: Vec<&OsStr> = vec![&OsStr::new("-o"), &OsStr::new("auto_unmount")];
 
-            let mount_point: OsString = OsString::from(sub_matches.value_of_os("target").unwrap());
+            let mount_point: OsString = sub_matches.value_of_os("target").expect("'target' is required").into();
 
             fuse_mt::mount(
                 fuse_mt::FuseMT::new(filesystem, 1),
                 &mount_point,
                 &fuse_args,
-            )
-            .unwrap();
+            )?
         },
         ("build", Some(sub_matches)) => {
             cache::build(
-                sub_matches.value_of("root").unwrap(),
-                sub_matches.value_of("output").unwrap(),
-            );
+                sub_matches.value_of("root").expect("'root' is required"),
+                sub_matches.value_of("output").expect("'output' has default value"),
+            )?;
         }
         _ => {}
-    }
+    };
+
+    Ok(())
 }
