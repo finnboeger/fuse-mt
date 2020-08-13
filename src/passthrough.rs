@@ -33,11 +33,24 @@ pub struct PassthroughFS {
 }
 
 impl PassthroughFS {
-    pub fn new<P: AsRef<Path>>(target: OsString, cache_path: P) -> Result<Self> {
+    #[allow(unused_variables)]
+    pub fn new<P: AsRef<Path>>(target: OsString, cache_path: P, coverdb: Option<PathBuf>) -> Result<Self> {
         let cache_path = cache_path.as_ref();
         let file = File::open(cache_path).with_context(|| format!("Failed to open cache zip at '{}'", cache_path.display()))?;
         let mut zip = zip::ZipArchive::new(file).context("Failed to parse cache file as zip")?;
         let struct_cache = load_from_zip(&mut zip).context("Unable to load cache")?;
+        
+        #[cfg(feature = "cover")]
+        if let Some(dest) = coverdb {
+            // don't fail if the cache was created without a coverdb
+            if let Ok(mut coverdb) = zip.by_name("cover.db") {
+                let mut src = tempfile::NamedTempFile::new().context("Failed to create temporary file for the src coverdb")?;
+                io::copy(&mut coverdb, &mut src).context("Failed to extract cache coverdb")?;
+                src.flush()?;
+                crate::coverdb::import(&src, &dest, &target).context("Failed to import coverdb")?;
+            }
+        }
+        
         Ok(Self {
             target,
             struct_cache,

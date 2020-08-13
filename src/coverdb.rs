@@ -2,6 +2,8 @@ use anyhow::{Context, Result};
 use diesel::prelude::*;
 use diesel::connection::SimpleConnection;
 use image::{GenericImageView, Pixel};
+#[cfg(feature = "mount")]
+use indicatif::{ProgressBar, ProgressIterator};
 
 use std::{
     io::{Seek, Write},
@@ -99,7 +101,58 @@ impl CoverDB {
 
     pub fn write<W: Write>(mut self, mut target: W) -> Result<()> {
         std::mem::drop(self.conn);
+        self.dbfile.flush()?;
         self.dbfile.seek(std::io::SeekFrom::Start(0))?;
-        std::io::copy(&mut self.dbfile, &mut target).context("Unable to write cover.db").map(|_| ())
+        std::io::copy(&mut self.dbfile, &mut target).context("Unable to write cover.db").map(|_| ())?;
+        Ok(())
     }
+}
+
+#[cfg(feature = "mount")]
+pub fn import<P1: AsRef<Path>, P2: AsRef<Path>, P3: AsRef<Path>>(cache: P1, dest: P2, base: P3) -> Result<()> {
+    let src = diesel::sqlite::SqliteConnection::establish(cache.as_ref().to_str().expect("src database path is no valid UTF-8"))?;
+    let dest = diesel::sqlite::SqliteConnection::establish(dest.as_ref().to_str().expect("dest database path is no valid UTF-8"))?;
+    let base = base.as_ref();
+
+    info!("Importing cover.db");
+    let covers = Cover::table.load::<(i32, String, i32, i32, i32)>(&src).context("Failed to load table Cover from cache cover.db")?;
+    let pb = ProgressBar::new(covers.len() as u64);
+    let pb_err = pb.clone();
+
+    for cover in covers.into_iter().progress_with(pb) {
+        let old_id = cover.0;
+        let file_path = base.join(&cover.1);
+        let file = file_path.to_str().with_context(|| format!("Unable to represent new filename as UTF-8: {}", file_path.display()))?;
+        if let Err(diesel::result::Error::NotFound) = Cover::table.filter(Cover::Filename.eq(&file)).count().get_result::<i64>(&dest) {
+            if let Err(err) = dest.transaction(|| -> Result<()> {
+                diesel::insert_into(Cover::table)
+                .values((
+                    Cover::Filename.eq(&file),
+                    Cover::CreationDate.eq(cover.2),
+                    Cover::Width.eq(cover.3),
+                    Cover::Height.eq(cover.4),
+                ))
+                .execute(&dest).with_context(|| format!("Unable to add cover to database '{}'", old_id))?;
+
+                let new_id: i32 = Cover::table.select(Cover::ID).order(Cover::ID.desc()).first(&dest).with_context(|| format!("Unable to get new ID of cover {}", old_id))?;
+                let cover_thumbnail = CoverThumbnail::table.find(old_id).first::<(i32, i32, i32, i32, Option<Vec<u8>>)>(&src).with_context(|| format!("Unable to find CoverThumbnail for {}", old_id))?;
+                
+                diesel::insert_into(CoverThumbnail::table)
+                .values((
+                    CoverThumbnail::ID.eq(new_id),
+                    CoverThumbnail::Format.eq(cover_thumbnail.1),
+                    CoverThumbnail::Width.eq(cover_thumbnail.2),
+                    CoverThumbnail::Height.eq(cover_thumbnail.3),
+                    CoverThumbnail::Data.eq(cover_thumbnail.4),
+                ))
+                .execute(&dest).with_context(|| format!("Unable to add thumbnail to database '{}'", old_id))?;
+
+                Ok(())
+            }) {
+                pb_err.println(format!("Error importing '{}'({}): {}", cover.0, cover.1, err));
+            }
+        }
+    }
+
+    Ok(())
 }
