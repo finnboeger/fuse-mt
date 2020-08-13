@@ -1,6 +1,9 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::io::Cursor;
+use std::path::Path;
+use std::ffi::OsString;
 
 pub struct FileHandles {
     open: HashMap<u64, Descriptor>,
@@ -42,12 +45,23 @@ impl FileHandles {
             Some(d) => Ok(d),
         }
     }
+
+    pub fn find_mut(&mut self, handle: u64) -> Result<&mut Descriptor, &str> {
+        match self.open.get_mut(&handle) {
+            None => Err("Handle not found"),
+            Some(d) => Ok(d),
+        }
+    }
 }
 
 // TODO: figure out how read operates on this level and design a structure that works to read the cached .txt files
 pub enum Descriptor {
     Path(PathBuf),
     Handle(u64),
+    File {
+        path: OsString,
+        cursor: Cursor<Vec<u8>>,
+    },
 }
 
 impl Descriptor {
