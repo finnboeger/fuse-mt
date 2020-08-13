@@ -111,7 +111,11 @@ impl CoverDB {
 #[cfg(feature = "mount")]
 pub fn import<P1: AsRef<Path>, P2: AsRef<Path>, P3: AsRef<Path>>(cache: P1, dest: P2, base: P3) -> Result<()> {
     let src = diesel::sqlite::SqliteConnection::establish(cache.as_ref().to_str().expect("src database path is no valid UTF-8"))?;
+    let db_exists = dest.as_ref().exists();
     let dest = diesel::sqlite::SqliteConnection::establish(dest.as_ref().to_str().expect("dest database path is no valid UTF-8"))?;
+    if !db_exists {
+        dest.batch_execute(include_str!("init.sql")).context("Failed to initialize database")?;
+    }
     let base = base.as_ref();
 
     info!("Importing cover.db");
@@ -123,6 +127,7 @@ pub fn import<P1: AsRef<Path>, P2: AsRef<Path>, P3: AsRef<Path>>(cache: P1, dest
         let old_id = cover.0;
         let file_path = base.join(&cover.1);
         let file = file_path.to_str().with_context(|| format!("Unable to represent new filename as UTF-8: {}", file_path.display()))?;
+
         if let Err(diesel::result::Error::NotFound) = Cover::table.filter(Cover::Filename.eq(&file)).count().get_result::<i64>(&dest) {
             if let Err(err) = dest.transaction(|| -> Result<()> {
                 diesel::insert_into(Cover::table)
