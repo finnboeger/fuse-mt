@@ -65,7 +65,7 @@ impl CoverDB {
     pub fn add<P: AsRef<Path>>(&mut self, cover: P) -> Result<()> {
         let cover = cover.as_ref();
 
-        self.conn.immediate_transaction(|| {
+        self.conn.transaction(|| {
             let image = image::open(cover).with_context(|| format!("Unable to load image file '{}'", cover.display()))?;
             diesel::insert_into(Cover::table)
                 .values((
