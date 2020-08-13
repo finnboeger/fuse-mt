@@ -259,12 +259,6 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, ge
     Ok(())
 }
 
-pub fn load(path: &Path) -> Result<Entry> {
-    let file = File::open(path).context("Failed to load cache")?;
-    let mut zip = zip::ZipArchive::new(file).context("Failed to open cache as zip archive")?;
-    load_from_zip(&mut zip)
-}
-
 pub fn load_from_zip(zip: &mut ZipArchive<File>) -> Result<Entry> {
     serde_json::from_reader(
         zip.by_name("files.json").context("Cache contains no files.json / is malformed")?)

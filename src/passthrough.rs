@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use crate::libc_extras::libc;
 use crate::libc_wrappers;
 
-use crate::cache::{load, Entry};
+use crate::cache::{load_from_zip, Entry};
 use crate::file_handles::*;
 use crate::stat::*;
 use crate::utils::*;
@@ -36,10 +36,11 @@ impl PassthroughFS {
     pub fn new<P: AsRef<Path>>(target: OsString, cache_path: P) -> Result<Self> {
         let cache_path = cache_path.as_ref();
         let file = File::open(cache_path).with_context(|| format!("Failed to open cache zip at '{}'", cache_path.display()))?;
-        let zip = zip::ZipArchive::new(file).context("Failed to parse cache file as zip")?;
+        let mut zip = zip::ZipArchive::new(file).context("Failed to parse cache file as zip")?;
+        let struct_cache = load_from_zip(&mut zip).context("Unable to load cache")?;
         Ok(Self {
             target,
-            struct_cache: load(cache_path).context("Unable to load cache")?,
+            struct_cache,
             files_cache: Mutex::new(zip),
             file_handles: Mutex::new(FileHandles::new()),
         })
