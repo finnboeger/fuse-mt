@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use crate::stat::stat_to_fuse_serializable;
 use crate::types::SerializableFileAttr;
+use crate::utils::*;
 #[cfg(feature = "cover")]
 use crate::coverdb::CoverDB;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -69,6 +70,7 @@ impl Entry {
     }
 
     pub fn find(&self, path: &Path) -> Result<&Entry> {
+        let path = path_to_rel(path);
         if path == Path::new("") {
             return Ok(self);
         }
@@ -106,6 +108,7 @@ impl Entry {
     }
 
     fn find_mut(&mut self, path: &Path) -> Result<&mut Entry> {
+        let path = path_to_rel(path);
         if path == Path::new("") {
             return Ok(self);
         }

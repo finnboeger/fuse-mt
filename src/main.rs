@@ -30,6 +30,7 @@ mod libc_wrappers;
 mod passthrough;
 mod stat;
 mod types;
+mod utils;
 
 fn main() -> Result<()> {
     Builder::new()

@@ -19,6 +19,7 @@ use crate::libc_wrappers;
 use crate::cache::{load, Entry};
 use crate::file_handles::*;
 use crate::stat::*;
+use crate::utils::*;
 use fuse_mt::*;
 use std::sync::Mutex;
 use time::*;
@@ -51,7 +52,7 @@ impl PassthroughFS {
     }
 
     fn stat_real(&self, path: &Path) -> io::Result<FileAttr> {
-        match self.struct_cache.find(path_to_rel(path)) {
+        match self.struct_cache.find(path) {
             Ok(Entry::Dict {
                 name: _,
                 contents: _,
@@ -71,14 +72,6 @@ const TTL: Timespec = Timespec { sec: 1, nsec: 0 };
 trait ReadSeek: Read + Seek {}
 impl ReadSeek for UnmanagedFile {}
 impl ReadSeek for Cursor<Vec<u8>> {}
-
-fn path_to_rel(path: &Path) -> &Path {
-    if path.starts_with("/") {
-        path.strip_prefix("/").unwrap()
-    } else if path.starts_with("./") {
-        path.strip_prefix("./").unwrap()
-    } else { path }
-}
 
 // TODO: for all operations that change the file structure (e.g. delete, create, rename, chmod, ..)
 //       and for write operations on cached files return ENOSYS?
@@ -428,7 +421,7 @@ impl FilesystemMT for PassthroughFS {
 
     fn opendir(&self, _req: RequestInfo, path: &Path, _flags: u32) -> ResultOpen {
         debug!("opendir: {:?} (flags = {:#o})", path, _flags);
-        match self.struct_cache.find(path_to_rel(path)) {
+        match self.struct_cache.find(path) {
             Ok(_) => Ok((
                 self.file_handles
                     .lock()
@@ -455,7 +448,7 @@ impl FilesystemMT for PassthroughFS {
         match self.file_handles.lock().unwrap().find(fh).unwrap() {
             Descriptor::Path(s) => {
                 assert_eq!(path, Path::new(&s));
-                match self.struct_cache.find(path_to_rel(path)) {
+                match self.struct_cache.find(path) {
                     Ok(e) => match e {
                         Entry::Dict {
                             name: _,
