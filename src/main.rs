@@ -5,7 +5,9 @@
 
 #![deny(rust_2018_idioms)]
 
-use anyhow::{Context, Result};
+#[cfg(feature = "mount")]
+use anyhow::Context;
+use anyhow::Result;
 use chrono::Local;
 use clap::{App, AppSettings, Arg, SubCommand};
 use env_logger::Builder;
@@ -23,6 +25,7 @@ extern crate diesel;
 mod cache;
 #[cfg(feature = "cover")]
 mod coverdb;
+#[cfg(feature = "mount")]
 mod file_handles;
 mod libc_extras;
 mod libc_wrappers;

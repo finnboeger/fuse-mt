@@ -270,7 +270,7 @@ impl FilesystemMT for PassthroughFS {
             },
             Ok(Some(mut file)) => {
                 let mut buf = Vec::new();
-                file.read_to_end(&mut buf);
+                file.read_to_end(&mut buf).expect("Zip cache was forcefully closed?");
                 Ok((
                     self.file_handles
                         .lock()
