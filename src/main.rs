@@ -87,13 +87,13 @@ fn main() -> Result<()> {
                 .help("Specify where the created cache file should be saved."));
     
     #[cfg(feature = "cover")]
-    let cache_command = cache_command.arg(Arg::with_name("coverdb")
-        .value_name("COVER_DB")
+    let cache_command = cache_command.arg(Arg::with_name("nocoverdb")
+        .value_name("NO_COVER_DB")
         .required(false)
-        .short("c")
-        .long("cover-db")
+        .short("s")
+        .long("skip-coverdb")
         .takes_value(false)
-        .help("creates a relative cover_db file with can be loaded by the mount-command to skip thumbnail generation"));
+        .help("skips creation of a relative cover_db file with can be loaded by the mount-command to skip thumbnail generation of ultrastar"));
             
     let app = app.subcommand(cache_command);
 
@@ -127,7 +127,7 @@ fn main() -> Result<()> {
             #[cfg(not(feature = "cover"))]
             let cover = false;
             #[cfg(feature = "cover")]
-            let cover = sub_matches.is_present("coverdb");
+            let cover = !sub_matches.is_present("nocoverdb");
             cache::build(
                 sub_matches.value_of("root").expect("'root' is required"),
                 sub_matches.value_of("output").expect("'output' has default value"),
