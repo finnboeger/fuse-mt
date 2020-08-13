@@ -2,7 +2,6 @@ use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::io::Cursor;
-use std::path::Path;
 use std::ffi::OsString;
 
 pub struct FileHandles {
