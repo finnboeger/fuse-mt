@@ -12,6 +12,7 @@ use std::fs::File;
 use std::io::copy;
 use std::path::Path;
 use walkdir::WalkDir;
+#[cfg(feature = "mount")]
 use zip::ZipArchive;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -69,6 +70,7 @@ impl Entry {
         }
     }
 
+    #[cfg(feature = "mount")]
     pub fn find(&self, path: &Path) -> Result<&Entry> {
         let path = path_to_rel(path);
         if path == Path::new("") {
@@ -163,6 +165,7 @@ fn add_to_coverdb(p: &Path, cover_db: &mut CoverDB) -> Result<()> {
     Ok(())
 }
 
+#[allow(unused_variables)]
 pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, generate_coverdb: bool) -> Result<()> {
     let src_path = src_path.as_ref();
     let output_path = output_path.as_ref();
@@ -259,6 +262,7 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, ge
     Ok(())
 }
 
+#[cfg(feature = "mount")]
 pub fn load_from_zip(zip: &mut ZipArchive<File>) -> Result<Entry> {
     serde_json::from_reader(
         zip.by_name("files.json").context("Cache contains no files.json / is malformed")?)
