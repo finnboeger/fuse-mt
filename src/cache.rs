@@ -220,7 +220,7 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, ge
         if p.extension().map_or(false, |x| x == "txt") {
             // Add to cache if it is a .txt-file
             if let Err(err) = add_txt_to_cache(p, &mut zip, &options) {
-                warn!("Unable to cache '{}': {}", p.display(), err);
+                pb.println(format!("[WARN] Unable to cache '{}': {}", p.display(), err));
                 continue;
             }
             
@@ -228,7 +228,7 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, ge
             #[cfg(feature = "cover")]
             if generate_coverdb {
                 if let Err(err) = add_to_coverdb(p, &mut cover_db) {
-                    warn!("Unable to add to cover database '{}': {}", p.display(), err);
+                    pb.println(format!("[WARN] Unable to add to cover database '{}': {}", p.display(), err));
                     continue;
                 }
             }
