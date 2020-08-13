@@ -5,6 +5,7 @@
 
 #![deny(rust_2018_idioms)]
 
+use anyhow::{Context, Result};
 use chrono::Local;
 use clap::{App, AppSettings, Arg, SubCommand};
 use env_logger::Builder;
@@ -15,8 +16,13 @@ use std::io::Write;
 
 #[macro_use]
 extern crate log;
+#[cfg_attr(feature = "cover", macro_use)]
+#[cfg(feature = "cover")]
+extern crate diesel;
 
 mod cache;
+#[cfg(feature = "cover")]
+mod coverdb;
 mod file_handles;
 mod libc_extras;
 mod libc_wrappers;
@@ -24,8 +30,9 @@ mod libc_wrappers;
 mod passthrough;
 mod stat;
 mod types;
+mod utils;
 
-fn main() {
+fn main() -> Result<()> {
     Builder::new()
         .format(|buf, record| {
             writeln!(
@@ -64,8 +71,8 @@ fn main() {
             .arg(Arg::with_name("target")
                 .help("Sets the mount point.")
                 .required(true)));
-
-    let app = app.subcommand(SubCommand::with_name("build")
+    
+    let cache_command = SubCommand::with_name("build")
             .about("Creates the cache to be used")
             .arg(Arg::with_name("root")
                 .value_name("ROOT_DIR")
@@ -77,7 +84,18 @@ fn main() {
                 .takes_value(true)
                 .value_name("FILE")
                 .default_value("cache.zip")
-                .help("Specify where the created cache file should be saved.")));
+                .help("Specify where the created cache file should be saved."));
+    
+    #[cfg(feature = "cover")]
+    let cache_command = cache_command.arg(Arg::with_name("nocoverdb")
+        .value_name("NO_COVER_DB")
+        .required(false)
+        .short("s")
+        .long("skip-coverdb")
+        .takes_value(false)
+        .help("skips creation of a relative cover_db file with can be loaded by the mount-command to skip thumbnail generation of ultrastar"));
+            
+    let app = app.subcommand(cache_command);
 
     let matches = app.get_matches();
 
@@ -87,9 +105,9 @@ fn main() {
             // TODO: load and use cache
 
             let filesystem = passthrough::PassthroughFS::new(
-                OsString::from(sub_matches.value_of_os("source").unwrap()),
-                sub_matches.value_of("cache").unwrap(),
-            );
+                sub_matches.value_of_os("source").expect("'source' is required").into(),
+                sub_matches.value_of("cache").expect("'cache' has default"),
+            ).context("Unable to load filesystem")?;
 
             println!("Filesystem has been created");
 
@@ -97,21 +115,27 @@ fn main() {
 
             let fuse_args: Vec<&OsStr> = vec![&OsStr::new("-o"), &OsStr::new("auto_unmount")];
 
-            let mount_point: OsString = OsString::from(sub_matches.value_of_os("target").unwrap());
+            let mount_point: OsString = sub_matches.value_of_os("target").expect("'target' is required").into();
 
             fuse_mt::mount(
                 fuse_mt::FuseMT::new(filesystem, 1),
                 &mount_point,
                 &fuse_args,
-            )
-            .unwrap();
+            )?
         },
         ("build", Some(sub_matches)) => {
+            #[cfg(not(feature = "cover"))]
+            let cover = false;
+            #[cfg(feature = "cover")]
+            let cover = !sub_matches.is_present("nocoverdb");
             cache::build(
-                sub_matches.value_of("root").unwrap(),
-                sub_matches.value_of("output").unwrap(),
-            );
+                sub_matches.value_of("root").expect("'root' is required"),
+                sub_matches.value_of("output").expect("'output' has default value"),
+                cover,
+            )?;
         }
         _ => {}
-    }
+    };
+
+    Ok(())
 }

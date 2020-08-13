@@ -1,6 +1,9 @@
+use anyhow::{anyhow, Result};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::io::Cursor;
 use std::path::Path;
+use std::ffi::OsString;
 
 pub struct FileHandles {
     open: HashMap<u64, Descriptor>,
@@ -29,16 +32,16 @@ impl FileHandles {
         key
     }
 
-    pub fn free_handle(&mut self, handle: u64) -> Result<Descriptor, &str> {
+    pub fn free_handle(&mut self, handle: u64) -> Result<Descriptor> {
         match self.open.remove(&handle) {
-            None => Err("Handle not found"),
+            None => Err(anyhow!("Handle not found")),
             Some(d) => Ok(d),
         }
     }
 
-    pub fn find(&self, handle: u64) -> Result<&Descriptor, &str> {
+    pub fn find(&self, handle: u64) -> Result<&Descriptor> {
         match self.open.get(&handle) {
-            None => Err("Handle not found"),
+            None => Err(anyhow!("Handle not found")),
             Some(d) => Ok(d),
         }
     }
@@ -53,16 +56,16 @@ impl FileHandles {
 
 // TODO: figure out how read operates on this level and design a structure that works to read the cached .txt files
 pub enum Descriptor {
-    Path(String),
+    Path(PathBuf),
     Handle(u64),
     File {
-        path: String,
+        path: OsString,
         cursor: Cursor<Vec<u8>>,
     },
 }
 
 impl Descriptor {
-    pub fn new(path: &Path) -> Self {
-        Self::Path(path.to_str().unwrap().to_string())
+    pub fn new<I: Into<PathBuf>>(path: I) -> Self {
+        Self::Path(path.into())
     }
 }
