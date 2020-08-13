@@ -76,7 +76,7 @@ impl Entry {
         }
 
         let mut item = self;
-        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
+        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev().skip(1) {
             match item {
                 Entry::File { name: _, stat: _ } => return Err(anyhow!("Can't search in a file")),
                 Entry::Dict {
@@ -114,7 +114,7 @@ impl Entry {
         }
 
         let mut item = self;
-        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev() {
+        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev().skip(1) {
             match item {
                 Entry::File { name: _, stat: _ } => return Err(anyhow!("Can't search in a file")),
                 Entry::Dict {
