@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use diesel::prelude::*;
+use diesel::connection::SimpleConnection;
 use image::{GenericImageView, Pixel};
 
 use std::{
@@ -54,7 +55,7 @@ impl CoverDB {
     pub fn new<P: AsRef<Path>>(relative: P) -> Result<CoverDB> {
         let temp = tempfile::NamedTempFile::new().context("Unable to open temporary cover.db file")?;
         let conn = diesel::sqlite::SqliteConnection::establish(temp.path().to_str().expect("NamedFile path is no valid UTF-8"))?;
-        diesel::sql_query(include_str!("init.sql")).execute(&conn).context("Failed to initialize database")?;
+        conn.batch_execute(include_str!("init.sql")).context("Failed to initialize database")?;
         Ok(CoverDB {
             dbfile: temp,
             conn,
