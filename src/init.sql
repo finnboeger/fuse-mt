@@ -1,4 +1,3 @@
--- Your SQL goes here
 CREATE TABLE [Cover] (
     [ID] INTEGER  NOT NULL PRIMARY KEY AUTOINCREMENT,
     [Filename] TEXT  UNIQUE NOT NULL,
