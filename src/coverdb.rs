@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use diesel::prelude::*;
 use diesel::connection::SimpleConnection;
-use image::{GenericImageView, Pixel};
+use image::GenericImageView;
 #[cfg(feature = "mount")]
 use indicatif::{ProgressBar, ProgressIterator};
 
@@ -10,7 +10,6 @@ use std::{
     time::SystemTime,
     path::{Path, PathBuf}
 };
-use image::imageops::FilterType;
 
 table! {
     #[allow(non_snake_case)]
@@ -31,7 +30,7 @@ table! {
         Format -> Integer,
         Width -> Integer,
         Height -> Integer,
-        Data -> Nullable<Binary>,
+        Data -> Integer,
     }
 }
 
@@ -83,15 +82,13 @@ impl CoverDB {
             
             let id: i32 = Cover::table.select(Cover::ID).order(Cover::ID.desc()).first(&self.conn).context("Unable to get ID of cover")?;
             // the database fields needs to be uncompressed/non-overlapping
-            let thumbnail: Vec<u8> = image.resize_to_fill(TEXTURE_WIDTH as u32, TEXTURE_HEIGHT as u32, FilterType::Triangle).into_rgb()
-                .pixels().flat_map(|pixel| pixel.channels()).copied().collect();
             diesel::insert_into(CoverThumbnail::table)
                 .values((
                     CoverThumbnail::ID.eq(id),
                     CoverThumbnail::Format.eq(TEXTURE_FORMAT),
                     CoverThumbnail::Width.eq(TEXTURE_WIDTH),
                     CoverThumbnail::Height.eq(TEXTURE_HEIGHT),
-                    CoverThumbnail::Data.eq(Some(&thumbnail)),
+                    CoverThumbnail::Data.eq(0),
                 ))
                 .execute(&self.conn).with_context(|| format!("Unable to add cover to database '{}'", cover.display()))?;
             
@@ -140,7 +137,7 @@ pub fn import<P1: AsRef<Path>, P2: AsRef<Path>, P3: AsRef<Path>>(cache: P1, dest
                 .execute(&dest).with_context(|| format!("Unable to add cover to database '{}'", old_id))?;
 
                 let new_id: i32 = Cover::table.select(Cover::ID).order(Cover::ID.desc()).first(&dest).with_context(|| format!("Unable to get new ID of cover {}", old_id))?;
-                let cover_thumbnail = CoverThumbnail::table.find(old_id).first::<(i32, i32, i32, i32, Option<Vec<u8>>)>(&src).with_context(|| format!("Unable to find CoverThumbnail for {}", old_id))?;
+                let cover_thumbnail = CoverThumbnail::table.find(old_id).first::<(i32, i32, i32, i32, i32)>(&src).with_context(|| format!("Unable to find CoverThumbnail for {}", old_id))?;
                 
                 diesel::insert_into(CoverThumbnail::table)
                 .values((
