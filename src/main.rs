@@ -128,6 +128,7 @@ fn main() -> Result<()> {
 
             let filesystem = passthrough::PassthroughFS::new(
                 sub_matches.value_of_os("source").expect("'source' is required").into(),
+                sub_matches.value_of_os("target").expect("'target' is required").into(),
                 sub_matches.value_of("cache").expect("'cache' has default"),
                 cover,
             ).context("Unable to load filesystem")?;
