@@ -10,12 +10,13 @@ use std::{
     time::SystemTime,
     path::{Path, PathBuf}
 };
+use os_str_bytes::OsStringBytes;
 
 table! {
     #[allow(non_snake_case)]
     Cover (ID) {
         ID -> Integer,
-        Filename -> Text,
+        Filename -> Binary,
         #[sql_name = "Date"]
         CreationDate -> Integer,
         Width -> Integer,
@@ -39,9 +40,7 @@ allow_tables_to_appear_in_same_query!(
     CoverThumbnail,
 );
 
-// Default Thumbnail size in USDX (TODO: make this configurable?)
-const TEXTURE_WIDTH: i32 = 256;
-const TEXTURE_HEIGHT: i32 = 256;
+// Default Thumbnail format in USDX
 const TEXTURE_FORMAT: i32 = 1; //`ipfRGB` in USDX
 // https://github.com/UltraStar-Deluxe/USDX/blob/master/src/base/UCovers.pas#L456
 // https://github.com/UltraStar-Deluxe/USDX/blob/4849669cae06421369430c56c7e302f43fc47713/src/base/UImage.pas#L50
@@ -73,7 +72,9 @@ impl CoverDB {
                 .values((
                     Cover::Filename.eq(
                         cover.strip_prefix(&self.relative_to).with_context(|| format!("Cover '{}' is not relative to src_dir", cover.display()))?
-                        .to_str().with_context(|| format!("Unable to store filename '{}' in database", cover.display()))?),
+                        .to_str().with_context(|| format!("Unable to store filename '{}' in database", cover.display()))?
+                        .as_bytes()
+                    ),
                     Cover::CreationDate.eq(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).expect("SystemTime before unix epoch").as_secs() as i32),
                     Cover::Width.eq(image.width() as i32),
                     Cover::Height.eq(image.height() as i32),
@@ -86,8 +87,8 @@ impl CoverDB {
                 .values((
                     CoverThumbnail::ID.eq(id),
                     CoverThumbnail::Format.eq(TEXTURE_FORMAT),
-                    CoverThumbnail::Width.eq(TEXTURE_WIDTH),
-                    CoverThumbnail::Height.eq(TEXTURE_HEIGHT),
+                    CoverThumbnail::Width.eq(image.width() as i32),
+                    CoverThumbnail::Height.eq(image.height() as i32),
                     CoverThumbnail::Data.eq(0),
                 ))
                 .execute(&self.conn).with_context(|| format!("Unable to add cover to database '{}'", cover.display()))?;
@@ -116,14 +117,16 @@ pub fn import<P1: AsRef<Path>, P2: AsRef<Path>, P3: AsRef<Path>>(cache: P1, dest
     let base = base.as_ref();
 
     info!("Importing cover.db");
-    let covers = Cover::table.load::<(i32, String, i32, i32, i32)>(&src).context("Failed to load table Cover from cache cover.db")?;
+    let covers = Cover::table.load::<(i32, Vec<u8>, i32, i32, i32)>(&src).context("Failed to load table Cover from cache cover.db")?;
     let pb = ProgressBar::new(covers.len() as u64);
     let pb_err = pb.clone();
 
     for cover in covers.into_iter().progress_with(pb) {
         let old_id = cover.0;
-        let file_path = base.join(&cover.1);
-        let file = file_path.to_str().with_context(|| format!("Unable to represent new filename as UTF-8: {}", file_path.display()))?;
+        let file_path = base.join(PathBuf::from_vec(cover.1.clone()).context("Failed to load Filename as OsString from table Cover from cache cover.db")?);
+        let mut file = file_path.into_os_string().into_vec();
+        // Add null byte at the end since usdx is weird.
+        file.push(0);
 
         if let Err(diesel::result::Error::NotFound) | Ok(0)  = Cover::table.filter(Cover::Filename.eq(&file)).count().get_result::<i64>(&dest) {
             if let Err(err) = dest.transaction(|| -> Result<()> {
@@ -151,7 +154,7 @@ pub fn import<P1: AsRef<Path>, P2: AsRef<Path>, P3: AsRef<Path>>(cache: P1, dest
 
                 Ok(())
             }) {
-                pb_err.println(format!("Error importing '{}'({}): {}", cover.0, cover.1, err));
+                pb_err.println(format!("Error importing '{}'({}): {}", cover.0, std::str::from_utf8(&cover.1).context("Unable to convert bytes to utf8 str")?, err));
             }
         }
     }
