@@ -128,7 +128,7 @@ pub fn import<P1: AsRef<Path>, P2: AsRef<Path>, P3: AsRef<Path>>(cache: P1, dest
         let file_path = base.join(&cover.1);
         let file = file_path.to_str().with_context(|| format!("Unable to represent new filename as UTF-8: {}", file_path.display()))?;
 
-        if let Err(diesel::result::Error::NotFound) = Cover::table.filter(Cover::Filename.eq(&file)).count().get_result::<i64>(&dest) {
+        if let Err(diesel::result::Error::NotFound) | Ok(0)  = Cover::table.filter(Cover::Filename.eq(&file)).count().get_result::<i64>(&dest) {
             if let Err(err) = dest.transaction(|| -> Result<()> {
                 diesel::insert_into(Cover::table)
                 .values((
