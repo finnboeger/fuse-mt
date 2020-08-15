@@ -10,13 +10,12 @@ use std::{
     time::SystemTime,
     path::{Path, PathBuf}
 };
-use os_str_bytes::OsStringBytes;
 
 table! {
     #[allow(non_snake_case)]
     Cover (ID) {
         ID -> Integer,
-        Filename -> Binary,
+        Filename -> Text,
         #[sql_name = "Date"]
         CreationDate -> Integer,
         Width -> Integer,
@@ -68,13 +67,13 @@ impl CoverDB {
 
         self.conn.transaction(|| {
             let image = image::open(cover).with_context(|| format!("Unable to load image file '{}'", cover.display()))?;
+            let mut file_name = cover.strip_prefix(&self.relative_to).with_context(|| format!("Cover '{}' is not relative to src_dir", cover.display()))?
+                .to_str().with_context(|| format!("Unable to store filename '{}' in database", cover.display()))?.to_string();
+            // Add null byte at the end since usdx is weird.
+            file_name.push(char::from(0));
             diesel::insert_into(Cover::table)
                 .values((
-                    Cover::Filename.eq(
-                        cover.strip_prefix(&self.relative_to).with_context(|| format!("Cover '{}' is not relative to src_dir", cover.display()))?
-                        .to_str().with_context(|| format!("Unable to store filename '{}' in database", cover.display()))?
-                        .as_bytes()
-                    ),
+                    Cover::Filename.eq(&file_name),
                     Cover::CreationDate.eq(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).expect("SystemTime before unix epoch").as_secs() as i32),
                     Cover::Width.eq(image.width() as i32),
                     Cover::Height.eq(image.height() as i32),
@@ -117,22 +116,20 @@ pub fn import<P1: AsRef<Path>, P2: AsRef<Path>, P3: AsRef<Path>>(cache: P1, dest
     let base = base.as_ref();
 
     info!("Importing cover.db");
-    let covers = Cover::table.load::<(i32, Vec<u8>, i32, i32, i32)>(&src).context("Failed to load table Cover from cache cover.db")?;
+    let covers = Cover::table.load::<(i32, String, i32, i32, i32)>(&src).context("Failed to load table Cover from cache cover.db")?;
     let pb = ProgressBar::new(covers.len() as u64);
     let pb_err = pb.clone();
 
     for cover in covers.into_iter().progress_with(pb) {
         let old_id = cover.0;
-        let file_path = base.join(PathBuf::from_vec(cover.1.clone()).context("Failed to load Filename as OsString from table Cover from cache cover.db")?);
-        let mut file = file_path.into_os_string().into_vec();
-        // Add null byte at the end since usdx is weird.
-        file.push(0);
+        let file_path = base.join(&cover.1);
+        let file = file_path.to_str().with_context(|| format!("Unable to represent new filename as UTF-8: {}", file_path.display()))?;
 
         if let Err(diesel::result::Error::NotFound) | Ok(0)  = Cover::table.filter(Cover::Filename.eq(&file)).count().get_result::<i64>(&dest) {
             if let Err(err) = dest.transaction(|| -> Result<()> {
                 diesel::insert_into(Cover::table)
                 .values((
-                    Cover::Filename.eq(&file),
+                    Cover::Filename.eq(file),
                     Cover::CreationDate.eq(cover.2),
                     Cover::Width.eq(cover.3),
                     Cover::Height.eq(cover.4),
@@ -154,7 +151,7 @@ pub fn import<P1: AsRef<Path>, P2: AsRef<Path>, P3: AsRef<Path>>(cache: P1, dest
 
                 Ok(())
             }) {
-                pb_err.println(format!("Error importing '{}'({}): {}", cover.0, std::str::from_utf8(&cover.1).context("Unable to convert bytes to utf8 str")?, err));
+                pb_err.println(format!("Error importing '{}'({}): {}", cover.0, &cover.1, err));
             }
         }
     }
