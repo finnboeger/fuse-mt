@@ -52,28 +52,45 @@ fn main() -> Result<()> {
         .filter(None, LevelFilter::Warn)
         .init();
 
-    let app = App::new("Ultrastar-Fs")
+    let mut app = App::new("Ultrastar-Fs")
         .version("0.1.0")
         .author("Finn Böger <finnboeger@gmail.com>")
         .about("A jump start for ultrastar deluxe when using large song collections and/or slow media")
         .setting(AppSettings::SubcommandRequiredElseHelp);
-
+    
     #[cfg(feature = "mount")]
-    let app = app.subcommand(SubCommand::with_name("mount")
-            .about("Mirrors a given directory while using the cache to speed up i.a. directory listings")
-            .arg(Arg::with_name("cache")
-                .short("c")
-                .long("cache")
-                .takes_value(true)
-                .value_name("FILE")
-                .default_value("cache.zip")
-                .help("Sets a custom cache file."))
-            .arg(Arg::with_name("source")
-                .help("Sets the directory that will be mirrored.")
-                .required(true))
-            .arg(Arg::with_name("target")
-                .help("Sets the mount point.")
-                .required(true)));
+    {
+        #[allow(unused_mut)]
+        let mut mount_command = SubCommand::with_name("mount")
+                .about("Mirrors a given directory while using the cache to speed up i.a. directory listings")
+                .arg(Arg::with_name("cache")
+                    .short("c")
+                    .long("cache")
+                    .takes_value(true)
+                    .value_name("FILE")
+                    .default_value("cache.zip")
+                    .help("Sets a custom cache file."))
+                .arg(Arg::with_name("source")
+                    .help("Sets the directory that will be mirrored.")
+                    .required(true))
+                .arg(Arg::with_name("target")
+                    .help("Sets the mount point.")
+                    .required(true));
+
+        #[cfg(feature = "cover")]
+        {
+            mount_command = mount_command
+                .arg(Arg::with_name("coverdb")
+                    .value_name("IMPORT_COVER_DB")
+                    .short("i")
+                    .long("import-coverdb")
+                    .takes_value(true)
+                    .required(false)
+                    .help("Specify where the coverdb file is to import into"));
+        }
+
+        app = app.subcommand(mount_command);
+    }
     
     let cache_command = SubCommand::with_name("build")
             .about("Creates the cache to be used")
@@ -96,9 +113,9 @@ fn main() -> Result<()> {
         .short("s")
         .long("skip-coverdb")
         .takes_value(false)
-        .help("skips creation of a relative cover_db file with can be loaded by the mount-command to skip thumbnail generation of ultrastar"));
+        .help("Skips creation of a relative cover_db file with can be loaded by the mount-command to skip thumbnail generation of ultrastar"));
             
-    let app = app.subcommand(cache_command);
+    app = app.subcommand(cache_command);
 
     let matches = app.get_matches();
 
@@ -107,9 +124,16 @@ fn main() -> Result<()> {
         ("mount", Some(sub_matches)) => {
             // TODO: load and use cache
 
+            #[cfg(not(feature = "cover"))]
+            let cover = None;
+            #[cfg(feature = "cover")]
+            let cover = sub_matches.value_of("coverdb").map(std::path::PathBuf::from);
+
             let filesystem = passthrough::PassthroughFS::new(
                 sub_matches.value_of_os("source").expect("'source' is required").into(),
+                sub_matches.value_of_os("target").expect("'target' is required").into(),
                 sub_matches.value_of("cache").expect("'cache' has default"),
+                cover,
             ).context("Unable to load filesystem")?;
 
             println!("Filesystem has been created");
