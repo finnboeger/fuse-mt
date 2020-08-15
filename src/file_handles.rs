@@ -1,8 +1,8 @@
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::io::Cursor;
 use std::ffi::OsString;
+use std::io::Cursor;
+use std::path::PathBuf;
 
 pub struct FileHandles {
     open: HashMap<u64, Descriptor>,

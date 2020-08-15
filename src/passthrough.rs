@@ -34,23 +34,30 @@ pub struct PassthroughFS {
 
 impl PassthroughFS {
     #[allow(unused_variables)]
-    pub fn new<P: AsRef<Path>>(source: OsString, target: OsString, cache_path: P, coverdb: Option<PathBuf>) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(
+        source: OsString,
+        target: OsString,
+        cache_path: P,
+        coverdb: Option<PathBuf>,
+    ) -> Result<Self> {
         let cache_path = cache_path.as_ref();
-        let file = File::open(cache_path).with_context(|| format!("Failed to open cache zip at '{}'", cache_path.display()))?;
+        let file = File::open(cache_path)
+            .with_context(|| format!("Failed to open cache zip at '{}'", cache_path.display()))?;
         let mut zip = zip::ZipArchive::new(file).context("Failed to parse cache file as zip")?;
         let struct_cache = load_from_zip(&mut zip).context("Unable to load cache")?;
-        
+
         #[cfg(feature = "cover")]
         if let Some(dest) = coverdb {
             // don't fail if the cache was created without a coverdb
             if let Ok(mut coverdb) = zip.by_name("cover.db") {
-                let mut src = tempfile::NamedTempFile::new().context("Failed to create temporary file for the src coverdb")?;
+                let mut src = tempfile::NamedTempFile::new()
+                    .context("Failed to create temporary file for the src coverdb")?;
                 io::copy(&mut coverdb, &mut src).context("Failed to extract cache coverdb")?;
                 src.flush()?;
                 crate::coverdb::import(&src, &dest, &target).context("Failed to import coverdb")?;
             }
         }
-        
+
         Ok(Self {
             source,
             struct_cache,
@@ -68,10 +75,10 @@ impl PassthroughFS {
     fn stat_real(&self, path: &Path) -> io::Result<FileAttr> {
         match self.struct_cache.find(path) {
             Ok(Entry::Dict {
-                   name: _,
-                   contents: _,
-                   stat,
-               }) => Ok((*stat).into()),
+                name: _,
+                contents: _,
+                stat,
+            }) => Ok((*stat).into()),
             Ok(Entry::File { name: _, stat }) => Ok((*stat).into()),
             Err(_) => Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -156,7 +163,11 @@ impl FilesystemMT for PassthroughFS {
             }
         } else {
             let mut zip = self.files_cache.lock().unwrap();
-            let result = match path_to_rel(path).to_str().map(|x| zip.by_name(x)).transpose() {
+            let result = match path_to_rel(path)
+                .to_str()
+                .map(|x| zip.by_name(x))
+                .transpose()
+            {
                 Err(_) | Ok(None) => {
                     let real = self.real_path(path);
                     unsafe {
@@ -264,7 +275,11 @@ impl FilesystemMT for PassthroughFS {
     fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
         debug!("open: {:?} flags={:#x}", path, flags);
         let mut zip = self.files_cache.lock().unwrap();
-        let result = match path_to_rel(path).to_str().map(|x| zip.by_name(x)).transpose() {
+        let result = match path_to_rel(path)
+            .to_str()
+            .map(|x| zip.by_name(x))
+            .transpose()
+        {
             Err(_) | Ok(None) => {
                 let real = self.real_path(path);
                 match libc_wrappers::open(real, flags as libc::c_int) {
@@ -280,10 +295,11 @@ impl FilesystemMT for PassthroughFS {
                         Err(e)
                     }
                 }
-            },
+            }
             Ok(Some(mut file)) => {
                 let mut buf = Vec::new();
-                file.read_to_end(&mut buf).expect("Zip cache was forcefully closed?");
+                file.read_to_end(&mut buf)
+                    .expect("Zip cache was forcefully closed?");
                 Ok((
                     self.file_handles
                         .lock()
@@ -294,7 +310,7 @@ impl FilesystemMT for PassthroughFS {
                         }),
                     flags,
                 ))
-            },
+            }
         };
         result
     }

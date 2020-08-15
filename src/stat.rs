@@ -1,10 +1,10 @@
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
+use crate::libc_extras::libc;
+use crate::types::{SerializableFileAttr, SerializableFileType, SerializableTimespec};
 #[cfg(feature = "mount")]
 use fuse::FileType;
 #[cfg(feature = "mount")]
 use fuse_mt::{FileAttr, Statfs};
-#[cfg(any(target_os = "macos", target_os = "freebsd"))]
-use crate::libc_extras::libc;
-use crate::types::{SerializableFileAttr, SerializableTimespec, SerializableFileType};
 
 pub(crate) fn mode_to_filetype_serializable(mode: libc::mode_t) -> SerializableFileType {
     match mode & libc::S_IFMT {

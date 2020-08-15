@@ -1,9 +1,9 @@
-use anyhow::{anyhow, Context, Result};
+#[cfg(feature = "cover")]
+use crate::coverdb::CoverDB;
 use crate::stat::stat_to_fuse_serializable;
 use crate::types::SerializableFileAttr;
 use crate::utils::*;
-#[cfg(feature = "cover")]
-use crate::coverdb::CoverDB;
+use anyhow::{anyhow, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -33,7 +33,8 @@ impl Entry {
         // path needs to have a filename, otherwise we got a root, which is useless.
         // This function is private and the api would be annoying otherwise,
         // so we just require this.
-        let name = path.file_name()
+        let name = path
+            .file_name()
             .expect("Entry::new got a root")
             .to_os_string();
         if path.is_dir() {
@@ -78,7 +79,13 @@ impl Entry {
         }
 
         let mut item = self;
-        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev().skip(1) {
+        for ancestor in path
+            .ancestors()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .skip(1)
+        {
             match item {
                 Entry::File { name: _, stat: _ } => return Err(anyhow!("Can't search in a file")),
                 Entry::Dict {
@@ -88,7 +95,9 @@ impl Entry {
                 } => {
                     // We're assuming that all Entries are sorted, therefore we can execute a binary search.
                     item = match contents.binary_search_by(|other: &Entry| -> Ordering {
-                        let a = ancestor.file_name().expect("Entry::find requires relative path");
+                        let a = ancestor
+                            .file_name()
+                            .expect("Entry::find requires relative path");
                         let b = match other {
                             Entry::File { name, stat: _ } => name,
                             Entry::Dict {
@@ -116,7 +125,13 @@ impl Entry {
         }
 
         let mut item = self;
-        for ancestor in path.ancestors().collect::<Vec<_>>().into_iter().rev().skip(1) {
+        for ancestor in path
+            .ancestors()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .skip(1)
+        {
             match item {
                 Entry::File { name: _, stat: _ } => return Err(anyhow!("Can't search in a file")),
                 Entry::Dict {
@@ -126,7 +141,9 @@ impl Entry {
                 } => {
                     // We're assuming that all Entries are sorted, therefore we can execute a binary search.
                     item = match contents.binary_search_by(|other: &Entry| -> Ordering {
-                        let a = ancestor.file_name().expect("Entry::find_mut requires relative path");
+                        let a = ancestor
+                            .file_name()
+                            .expect("Entry::find_mut requires relative path");
                         let b = match other {
                             Entry::File { name, stat: _ } => name,
                             Entry::Dict {
@@ -148,8 +165,13 @@ impl Entry {
     }
 }
 
-fn add_txt_to_cache(p: &Path, mut zip: &mut zip::ZipWriter<File>, options: &zip::write::FileOptions) -> Result<()> {
-    zip.start_file_from_path(p, *options).context("Failed to start zip file")?;
+fn add_txt_to_cache(
+    p: &Path,
+    mut zip: &mut zip::ZipWriter<File>,
+    options: &zip::write::FileOptions,
+) -> Result<()> {
+    zip.start_file_from_path(p, *options)
+        .context("Failed to start zip file")?;
     let mut file = File::open(p)?;
     copy(&mut file, &mut zip).context("Failed to copy into cache")?;
     Ok(())
@@ -158,15 +180,22 @@ fn add_txt_to_cache(p: &Path, mut zip: &mut zip::ZipWriter<File>, options: &zip:
 #[cfg(feature = "cover")]
 fn add_to_coverdb(p: &Path, cover_db: &mut CoverDB) -> Result<()> {
     // ultrastar-txt's errors are not Sync, which anyhow needs
-    let txt = ultrastar_txt::parse_txt_song(p).map_err(|err| anyhow!("Unable to parse song file: {}", err))?;
+    let txt = ultrastar_txt::parse_txt_song(p)
+        .map_err(|err| anyhow!("Unable to parse song file: {}", err))?;
     if let Some(cover_path) = txt.header.cover_path {
-        cover_db.add(&cover_path).with_context(|| format!("Failed to load cover '{}' into db", cover_path.display()))?;
+        cover_db
+            .add(&cover_path)
+            .with_context(|| format!("Failed to load cover '{}' into db", cover_path.display()))?;
     }
     Ok(())
 }
 
 #[allow(unused_variables)]
-pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, generate_coverdb: bool) -> Result<()> {
+pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(
+    src_path: P1,
+    output_path: P2,
+    generate_coverdb: bool,
+) -> Result<()> {
     let src_path = src_path.as_ref();
     let output_path = output_path.as_ref();
     assert!(src_path.is_dir());
@@ -192,10 +221,13 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, ge
     let mut cover_db = CoverDB::new(src_path).context("Unable to initialize cover.db")?;
 
     let pb = ProgressBar::new_spinner();
-    pb.set_style(ProgressStyle::default_spinner().template("{spinner:.green} [{elapsed_precise}] {msg}"));
+    pb.set_style(
+        ProgressStyle::default_spinner().template("{spinner:.green} [{elapsed_precise}] {msg}"),
+    );
     let mut counter = 1;
 
-    std::env::set_current_dir(src_path).with_context(|| format!("Unable to change current_dir to '{}'", src_path.display()))?;
+    std::env::set_current_dir(src_path)
+        .with_context(|| format!("Unable to change current_dir to '{}'", src_path.display()))?;
     let entries = WalkDir::new(".")
         .sort_by(|a, b| a.file_name().cmp(b.file_name()))
         .min_depth(1);
@@ -226,12 +258,16 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, ge
                 pb.println(format!("[WARN] Unable to cache '{}': {}", p.display(), err));
                 continue;
             }
-            
+
             // Generate cover db entry, if this is a .txt-file
             #[cfg(feature = "cover")]
             if generate_coverdb {
                 if let Err(err) = add_to_coverdb(p, &mut cover_db) {
-                    pb.println(format!("[WARN] Unable to add to cover database '{}': {}", p.display(), err));
+                    pb.println(format!(
+                        "[WARN] Unable to add to cover database '{}': {}",
+                        p.display(),
+                        err
+                    ));
                     continue;
                 }
             }
@@ -241,16 +277,21 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, ge
     pb.finish();
 
     // Store directory structure
-    zip.start_file("files.json", options).context("Failed to create 'files.json' in cache.zip")?;
-    serde_json::to_writer_pretty(&mut zip, &root).context("Failed to write 'files.json' in cache.zip")?;
+    zip.start_file("files.json", options)
+        .context("Failed to create 'files.json' in cache.zip")?;
+    serde_json::to_writer_pretty(&mut zip, &root)
+        .context("Failed to write 'files.json' in cache.zip")?;
 
     // Store coverdb
     #[cfg(feature = "cover")]
     {
-        zip.start_file("cover.db", options).context("Failed to add cover.db to cache.zip")?;
-        cover_db.write(&mut zip).context("Failed to write cover.db to cache.zip")?;
+        zip.start_file("cover.db", options)
+            .context("Failed to add cover.db to cache.zip")?;
+        cover_db
+            .write(&mut zip)
+            .context("Failed to write cover.db to cache.zip")?;
     }
-    
+
     zip.finish().context("Failed to finish up cache.zip")?;
 
     // Restore original working directory (if any)
@@ -265,6 +306,9 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(src_path: P1, output_path: P2, ge
 #[cfg(feature = "mount")]
 pub fn load_from_zip(zip: &mut ZipArchive<File>) -> Result<Entry> {
     serde_json::from_reader(
-        zip.by_name("files.json").context("Cache contains no files.json / is malformed")?)
-    .context("files.json is no valid json").into()
+        zip.by_name("files.json")
+            .context("Cache contains no files.json / is malformed")?,
+    )
+    .context("files.json is no valid json")
+    .into()
 }
