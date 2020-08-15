@@ -15,7 +15,7 @@ Using *ultrastar-fs* is as simple as
    this creates a `cache.zip` that you can then use in the future.
 2. Mounting ultrastar-fs.
 
-   `cargo run mount <path to source> <mount point> -u <path to usdx config dir>`
+   `cargo run mount <path to source> <mount point> -i <path to usdx config dir>`
    
    This will wrap the `source` and expose it at the provided mount point. All calls to that mount point will be passed through ultrastar-fs and sped up using the cache.
 
