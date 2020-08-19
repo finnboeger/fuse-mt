@@ -3,6 +3,9 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static FH_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct FileHandles {
     open: HashMap<u64, Descriptor>,
@@ -16,11 +19,10 @@ impl FileHandles {
     }
 
     fn find_first_available(&self) -> u64 {
-        // 0 = stdin, 1 = stdout, 2 = stderr
-        let mut key: u64 = 3;
+        let mut key: u64 = FH_COUNTER.fetch_add(1, Ordering::SeqCst);
 
         while self.open.contains_key(&key) {
-            key += 1;
+            key = FH_COUNTER.fetch_add(1, Ordering::SeqCst);
         }
         key
     }
