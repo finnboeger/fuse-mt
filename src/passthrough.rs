@@ -120,6 +120,8 @@ impl FilesystemMT for PassthroughFS {
                         Ok(attr) => Ok((TTL, attr)),
                         Err(_) => Err(libc::ENOENT),
                     },
+                    Descriptor::Lazy(_) => unreachable!("Find does not return Descriptor::Lazy"),
+                    Descriptor::Error(_) => unreachable!("Find does not return Descriptor::Error"),
                 },
                 Err(_) => Err(libc::ENOENT),
             }
@@ -160,6 +162,8 @@ impl FilesystemMT for PassthroughFS {
                 Ok(Descriptor::Path(_)) => return Err(libc::EACCES),
                 Err(_) => return Err(libc::ENOENT),
                 Ok(Descriptor::File { path: _, cursor: _ }) => return Err(libc::EACCES),
+                Ok(Descriptor::Lazy(_)) => unreachable!("Find does not return Descriptor::Lazy"),
+                Ok(Descriptor::Error(_)) => unreachable!("Find does not return Descriptor::Error"),
             }
         } else {
             let mut zip = self.files_cache.lock().unwrap();
@@ -282,18 +286,15 @@ impl FilesystemMT for PassthroughFS {
         {
             Err(_) | Ok(None) => {
                 let real = self.real_path(path);
-                match libc_wrappers::open(real, flags as libc::c_int) {
-                    Ok(fh) => Ok((
-                        self.file_handles
+                if self.struct_cache.find(path).is_ok() {
+                    Ok((self.file_handles
                             .lock()
                             .unwrap()
-                            .register_handle(Descriptor::Handle(fh)),
-                        flags,
-                    )),
-                    Err(e) => {
-                        error!("open({:?}): {}", path, io::Error::from_raw_os_error(e));
-                        Err(e)
-                    }
+                            .register_handle(Descriptor::lazy(real, flags)),
+                        flags
+                    ))
+                } else {
+                    return Err(libc::ENOENT)
                 }
             }
             Ok(Some(mut file)) => {
@@ -327,7 +328,7 @@ impl FilesystemMT for PassthroughFS {
         debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
 
         // TODO: remove code duplication
-        match self.file_handles.lock().unwrap().find_mut(fh) {
+        match self.file_handles.lock().unwrap().find(fh) {
             Ok(d) => match d {
                 Descriptor::Path(_) => return callback(Err(libc::EISDIR)),
                 Descriptor::Handle(handle) => {
@@ -370,7 +371,9 @@ impl FilesystemMT for PassthroughFS {
                     }
 
                     callback(Ok(&data))
-                }
+                },
+                Descriptor::Lazy(_) => unreachable!("Find does not return Descriptor::Lazy"),
+                Descriptor::Error(_) => unreachable!("Find does not return Descriptor::Error"),
             },
             Err(_) => callback(Err(libc::EBADF)),
         }
@@ -439,7 +442,7 @@ impl FilesystemMT for PassthroughFS {
         match self.file_handles.lock().unwrap().free_handle(fh) {
             Ok(Descriptor::File { path: _, cursor: _ }) => Ok(()),
             Ok(Descriptor::Handle(handle)) => libc_wrappers::close(handle),
-            Ok(Descriptor::Path(_)) => Ok(()),
+            Ok(Descriptor::Path(_)) | Ok(Descriptor::Lazy(_)) | Ok(Descriptor::Error(_)) => Ok(()),
             Err(_) => Err(libc::EBADF),
         }
     }
@@ -486,11 +489,6 @@ impl FilesystemMT for PassthroughFS {
     fn readdir(&self, _req: RequestInfo, path: &Path, fh: u64) -> ResultReaddir {
         debug!("readdir: {:?}", path);
         let mut entries: Vec<DirectoryEntry> = vec![];
-
-        if fh == 0 {
-            error!("readdir: missing fh");
-            return Err(libc::EINVAL);
-        }
 
         match self.file_handles.lock().unwrap().find(fh).unwrap() {
             Descriptor::Path(s) => {
@@ -575,6 +573,8 @@ impl FilesystemMT for PassthroughFS {
                 Ok(entries)
             }
             Descriptor::File { path: _, cursor: _ } => Err(libc::ENOTDIR),
+            Descriptor::Lazy(_) => unreachable!("Find does not return Descriptor::Lazy"),
+            Descriptor::Error(_) => unreachable!("Find does not return Descriptor::Error"),
         }
     }
 
@@ -582,9 +582,11 @@ impl FilesystemMT for PassthroughFS {
     fn releasedir(&self, _req: RequestInfo, path: &Path, fh: u64, _flags: u32) -> ResultEmpty {
         debug!("releasedir: {:?}", path);
         match self.file_handles.lock().unwrap().free_handle(fh) {
-            Ok(Descriptor::Path(_)) => Ok(()),
             Ok(Descriptor::Handle(handle)) => libc_wrappers::closedir(handle),
-            Ok(Descriptor::File { path: _, cursor: _ }) => Ok(()),
+            Ok(Descriptor::Path(_))
+             | Ok(Descriptor::File { path: _, cursor: _ })
+             | Ok(Descriptor::Lazy(_))
+             | Ok(Descriptor::Error(_)) => Ok(()),
             Err(_) => Err(libc::EBADF),
         }
     }
