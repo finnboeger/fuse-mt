@@ -20,6 +20,7 @@ use crate::cache::{load_from_zip, Entry};
 use crate::file_handles::*;
 use crate::stat::*;
 use crate::utils::*;
+use crate::types::ArcBuf;
 use fuse_mt::*;
 use std::sync::Mutex;
 use time::*;
@@ -39,12 +40,13 @@ impl PassthroughFS {
         target: OsString,
         cache_path: P,
         coverdb: Option<PathBuf>,
+        skip_video: bool,
     ) -> Result<Self> {
         let cache_path = cache_path.as_ref();
         let file = File::open(cache_path)
             .with_context(|| format!("Failed to open cache zip at '{}'", cache_path.display()))?;
         let mut zip = zip::ZipArchive::new(file).context("Failed to parse cache file as zip")?;
-        let struct_cache = load_from_zip(&mut zip).context("Unable to load cache")?;
+        let mut struct_cache = load_from_zip(&mut zip).context("Unable to load cache")?;
 
         #[cfg(feature = "cover")]
         if let Some(dest) = coverdb {
@@ -57,6 +59,42 @@ impl PassthroughFS {
                 crate::coverdb::import(&src, &dest, &target).context("Failed to import coverdb")?;
             }
         }
+        
+        struct_cache.iter_files(|entry, path| {
+            if let Ok(Some(mut file)) = path_to_rel(path).to_str().map(|x| zip.by_name(x)).transpose() {
+                if path.extension().unwrap_or(OsStr::new("")) == "txt" {
+                    let mut buf = Vec::new();
+                    file.read_to_end(&mut buf)
+                        .expect("Zip cache was forcefully closed?");
+
+                    #[cfg(feature = "novideo")]
+                    if skip_video {
+                        if let Ok(mut txt) = crate::utils::read_txt_from_buf(&buf) {
+                            // Don't rewrite files without video
+                            if txt.header.video_path.is_some() {
+                                txt.header.video_path = None;
+                                txt.header.video_gap = None;
+                                if let Some(map) = txt.header.unknown.as_mut() {
+                                    map.insert(String::from("ENCODING"), String::from("UTF8"));
+                                }
+                                match ultrastar_txt::generate_song_txt(&txt.header, &txt.lines) {
+                                    Ok(no_video) => {
+                                        buf = no_video.into_bytes()
+                                    },
+                                    Err(err) => warn!("Unable to disable video for {}: {}", path.display(), err),
+                                };
+                            }
+                        }
+                    }
+                    
+                    let buf = ArcBuf::new(buf);
+                    match entry {
+                        Entry::File { contents, .. } => *contents = Some(buf),
+                        Entry::Dict { .. } => unreachable!(),
+                    }
+                }
+            }
+        });
 
         Ok(Self {
             source,
@@ -79,7 +117,15 @@ impl PassthroughFS {
                 contents: _,
                 stat,
             }) => Ok((*stat).into()),
-            Ok(Entry::File { name: _, stat }) => Ok((*stat).into()),
+            Ok(Entry::File { stat, contents, .. }) => {
+                let mut stat: FileAttr = (*stat).into();
+                if let Some(contents) = contents {
+                    let buf: &[u8] = contents.as_ref();
+                    stat.size = buf.len() as u64;
+                    stat.blocks = stat.size / 4096 + 1;
+                }
+                Ok(stat)
+            },
             Err(_) => Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 "entry not found in cache",
@@ -298,9 +344,16 @@ impl FilesystemMT for PassthroughFS {
                 }
             }
             Ok(Some(mut file)) => {
-                let mut buf = Vec::new();
-                file.read_to_end(&mut buf)
-                    .expect("Zip cache was forcefully closed?");
+                let entry = self.struct_cache.find(path).expect("Cache malformed");
+                let buf = match entry {
+                    Entry::File { contents, .. } => contents.clone().unwrap_or_else(|| {
+                        let mut buf = Vec::new();
+                        file.read_to_end(&mut buf)
+                            .expect("Zip cache was forcefully closed?");
+                        ArcBuf::new(buf)
+                    }),
+                    Entry::Dict { .. } => unreachable!(), 
+                };
                 Ok((
                     self.file_handles
                         .lock()
@@ -510,7 +563,7 @@ impl FilesystemMT for PassthroughFS {
                                         name: OsString::from(name),
                                         kind: stat.kind.into(),
                                     }),
-                                    Entry::File { name, stat } => entries.push(DirectoryEntry {
+                                    Entry::File { name, stat, .. } => entries.push(DirectoryEntry {
                                         name: OsString::from(name),
                                         kind: stat.kind.into(),
                                     }),
@@ -518,7 +571,7 @@ impl FilesystemMT for PassthroughFS {
                             }
                             Ok(entries)
                         }
-                        Entry::File { name: _, stat: _ } => Err(libc::ENOTDIR),
+                        Entry::File { .. } => Err(libc::ENOTDIR),
                     },
                     Err(_) => Err(libc::ENOENT),
                 }

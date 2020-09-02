@@ -49,7 +49,7 @@ fn main() -> Result<()> {
         })
         .filter(Some("fuse_mt"), LevelFilter::Warn)
         .filter(Some("fuse"), LevelFilter::Warn)
-        .filter(None, LevelFilter::Warn)
+        .filter(None, LevelFilter::Debug)
         .init();
 
     let mut app = App::new("Ultrastar-Fs")
@@ -89,6 +89,19 @@ fn main() -> Result<()> {
                     .takes_value(true)
                     .required(false)
                     .help("Specify where the coverdb file is to import into"),
+            );
+        }
+        
+        #[cfg(feature = "novideo")]
+        {
+            mount_command = mount_command.arg(
+                Arg::with_name("novideo")
+                    .value_name("NO_VIDEO")
+                    .short("d")
+                    .long("disable-videos")
+                    .required(false)
+                    .takes_value(false)
+                    .help("Disable videos of song files"),
             );
         }
 
@@ -138,6 +151,12 @@ fn main() -> Result<()> {
                 .value_of("coverdb")
                 .map(std::path::PathBuf::from);
 
+            #[cfg(not(feature = "novideo"))]
+            let skip_video = false;
+            #[cfg(feature = "novideo")]
+            let skip_video = sub_matches
+                .is_present("novideo");
+
             let filesystem = passthrough::PassthroughFS::new(
                 sub_matches
                     .value_of_os("source")
@@ -149,6 +168,7 @@ fn main() -> Result<()> {
                     .into(),
                 sub_matches.value_of("cache").expect("'cache' has default"),
                 cover,
+                skip_video,
             )
             .context("Unable to load filesystem")?;
 

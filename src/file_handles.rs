@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Context, Result};
+use crate::types::ArcBuf;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{Cursor, Error as IoError};
@@ -64,7 +65,7 @@ pub enum Descriptor {
     Error(i32),
     File {
         path: OsString,
-        cursor: Cursor<Vec<u8>>,
+        cursor: Cursor<ArcBuf>,
     },
 }
 

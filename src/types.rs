@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use time::Timespec;
 
 use std::convert::{From, Into};
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 pub struct SerializableFileAttr {
@@ -149,5 +150,20 @@ impl Into<Timespec> for SerializableTimespec {
             sec: self.sec,
             nsec: self.nsec,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ArcBuf(Arc<Vec<u8>>);
+
+impl ArcBuf {
+    pub fn new(buf: Vec<u8>) -> ArcBuf {
+        ArcBuf(Arc::new(buf))
+    }
+}
+
+impl AsRef<[u8]> for ArcBuf {
+    fn as_ref(&self) -> &[u8] {
+        &**(self.0)
     }
 }
