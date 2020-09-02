@@ -201,13 +201,40 @@ impl Entry {
 
 fn add_txt_to_cache(
     p: &Path,
-    mut zip: &mut zip::ZipWriter<File>,
+    zip: &mut zip::ZipWriter<File>,
     options: &zip::write::FileOptions,
 ) -> Result<()> {
     zip.start_file_from_path(p, *options)
         .context("Failed to start zip file")?;
     let mut file = File::open(p)?;
-    copy(&mut file, &mut zip).context("Failed to copy into cache")?;
+    copy(&mut file, zip).context("Failed to copy into cache")?;
+    Ok(())
+}
+
+fn add_audio_to_cache(
+    p: &Path,
+    zip: &mut zip::ZipWriter<File>,
+    options: &zip::write::FileOptions,
+) -> Result<()> {
+    use std::io::{Read, Write};
+
+    let extension = p.extension().expect("Extension is tested previously")
+        .to_str().expect("Extension was tested against utf8-strings previously");
+    zip.start_file_from_path(&p.with_extension(&format!("{}.part", extension)), *options)?;
+    let mut file = File::open(p)?;
+    let mut counter = 0;
+    while counter < 16_384 {
+        let mut buf = [0; 128];
+        let mut size = file.read(&mut buf)?;
+        if size == 0 {
+            break;
+        }
+        if counter + size > 16_384 {
+            size = 16_384 - counter;
+        };
+        zip.write_all(&buf[0..size])?;
+        counter += size;
+    }
     Ok(())
 }
 
@@ -229,6 +256,7 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(
     src_path: P1,
     output_path: P2,
     generate_coverdb: bool,
+    cache_audio: bool,
 ) -> Result<()> {
     let src_path = src_path.as_ref();
     let output_path = output_path.as_ref();
@@ -304,6 +332,19 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(
                     ));
                     continue;
                 }
+            }
+        }
+
+        if cache_audio && p.extension().map_or(false,
+            |x| x == "mp3" || x == "m4a" || x == "ogg" || x == "wav" || x == "wma" || x == "flac"
+        ) {
+            if let Err(err) = add_audio_to_cache(p, &mut zip, &options) {
+                pb.println(format!(
+                    "[WARN] Unable to add music header for '{}': {}",
+                    p.display(),
+                    err
+                ));
+                continue;
             }
         }
     }

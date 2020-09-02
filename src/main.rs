@@ -111,6 +111,15 @@ fn main() -> Result<()> {
     let cache_command = SubCommand::with_name("build")
         .about("Creates the cache to be used")
         .arg(
+            Arg::with_name("audio")
+                .value_name("AUDIO_CACHE")
+                .short("a")
+                .long("with-audio")
+                .takes_value(false)
+                .required(false)
+                .help("Cache headers of audio files to further speed up ultrastar over slow connections"),
+        )
+        .arg(
             Arg::with_name("root")
                 .value_name("ROOT_DIR")
                 .required(true)
@@ -200,6 +209,7 @@ fn main() -> Result<()> {
                     .value_of("output")
                     .expect("'output' has default value"),
                 cover,
+                sub_matches.is_present("audio"),
             )?;
         }
         _ => {}
