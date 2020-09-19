@@ -1,13 +1,13 @@
 #[cfg(feature = "cover")]
 use crate::coverdb::CoverDB;
 use crate::stat::stat_to_fuse_serializable;
-use crate::types::SerializableFileAttr;
+use crate::types::{SerializableFileAttr, ArcBuf};
 use crate::utils::*;
 use anyhow::{anyhow, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::ffi::OsString;
+use std::ffi::{OsString, OsStr};
 use std::fs::File;
 use std::io::copy;
 use std::path::Path;
@@ -25,7 +25,13 @@ pub enum Entry {
     File {
         name: OsString,
         stat: SerializableFileAttr,
+        #[serde(skip)]
+        #[serde(default = "new_none")] 
+        contents: Option<ArcBuf>,
     },
+}
+fn new_none<T>() -> Option<T> {
+    None
 }
 
 impl Entry {
@@ -53,13 +59,13 @@ impl Entry {
                 // remove write permission as files will be read from cache and readonly.
                 stat.perm = stat.perm & 0o5555;
             }
-            Entry::File { name, stat }
+            Entry::File { name, stat, contents: None }
         }
     }
 
     fn add_entry(&mut self, path: &Path) -> Result<()> {
         match self {
-            Entry::File { name: _, stat: _ } => Err(anyhow!("Can't add entry to a file")),
+            Entry::File { .. } => Err(anyhow!("Can't add entry to a file")),
             Entry::Dict {
                 name: _,
                 contents,
@@ -87,7 +93,7 @@ impl Entry {
             .skip(1)
         {
             match item {
-                Entry::File { name: _, stat: _ } => return Err(anyhow!("Can't search in a file")),
+                Entry::File { .. } => return Err(anyhow!("Can't search in a file")),
                 Entry::Dict {
                     name: _,
                     contents,
@@ -99,7 +105,7 @@ impl Entry {
                             .file_name()
                             .expect("Entry::find requires relative path");
                         let b = match other {
-                            Entry::File { name, stat: _ } => name,
+                            Entry::File { name, .. } => name,
                             Entry::Dict {
                                 name,
                                 contents: _,
@@ -133,7 +139,7 @@ impl Entry {
             .skip(1)
         {
             match item {
-                Entry::File { name: _, stat: _ } => return Err(anyhow!("Can't search in a file")),
+                Entry::File { .. } => return Err(anyhow!("Can't search in a file")),
                 Entry::Dict {
                     name: _,
                     contents,
@@ -145,7 +151,7 @@ impl Entry {
                             .file_name()
                             .expect("Entry::find_mut requires relative path");
                         let b = match other {
-                            Entry::File { name, stat: _ } => name,
+                            Entry::File { name, .. } => name,
                             Entry::Dict {
                                 name,
                                 contents: _,
@@ -163,7 +169,35 @@ impl Entry {
         }
         Ok(item)
     }
+
+    pub fn name(&self) -> &OsStr {
+        match self {
+            Entry::File { name, .. } => &name,
+            Entry::Dict { name, .. } => &name,
+        }
+    }
+
+    pub fn iter_files<F>(&mut self, mut f: F)
+        where F: FnMut(&mut Entry, &Path)
+    {
+        fn iter_files_internal<F>(entry: &mut Entry, path: &Path, f: &mut F) 
+            where F: FnMut(&mut Entry, &Path)
+        {
+            match entry {
+                x @ Entry::File { .. } => {
+                    f(x, &path.join(x.name()))
+                },
+                Entry::Dict { name, contents, .. } => {
+                    let current_dir = path.join(name);
+                    for entry in contents { iter_files_internal(entry, &current_dir, f) }
+                }
+            }
+        }
+        iter_files_internal(self, &Path::new(""), &mut f)
+    }
 }
+
+
 
 fn add_txt_to_cache(
     p: &Path,
