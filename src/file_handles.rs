@@ -45,10 +45,10 @@ impl FileHandles {
         }
     }
 
-    pub fn find(&mut self, handle: u64) -> Result<&mut Descriptor> {
+    pub fn find(&mut self, handle: u64, offset: Option<u64>) -> Result<&mut Descriptor> {
         match self.open.get_mut(&handle) {
             None => Err(anyhow!("Handle not found")),
-            Some(d) => match d.resolve() {
+            Some(d) => match d.resolve(offset) {
                 Ok(d) => Ok(d),
                 Err(err) => Err(err).context("Handle failed to open"),
             }
@@ -67,6 +67,11 @@ pub enum Descriptor {
         path: OsString,
         cursor: Cursor<ArcBuf>,
     },
+    Composite {
+        handle: Box<Descriptor>,
+        path: OsString,
+        cursor: Cursor<Vec<u8>>,
+    }
 }
 
 impl Descriptor {
@@ -95,7 +100,15 @@ impl Descriptor {
         Descriptor::Lazy(rx)
     }
 
-    pub fn resolve(&mut self) -> Result<&mut Self, IoError> {
+    pub fn lazy_composite(path: OsString, flags: u32, data: Vec<u8>) -> Self {
+        Descriptor::Composite {
+            handle: Box::new(Descriptor::lazy(path.clone(), flags)),
+            path,
+            cursor: Cursor::new(data),
+        }
+    }
+
+    pub fn resolve(&mut self, offset: Option<u64>) -> Result<&mut Self, IoError> {
         match self {
             &mut Descriptor::Lazy(ref mut rx) => {
                 match rx.recv().expect("Lazy open thread locked up") {
@@ -108,6 +121,26 @@ impl Descriptor {
                         Err(IoError::from_raw_os_error(x))
                     },
                 }
+            },
+            &mut Descriptor::Composite { ref mut handle, .. } => {
+                // only resolve, once we want to read from file
+                if offset.unwrap_or(0) >= 16_384 {
+                    match &mut **handle {
+                        &mut Descriptor::Lazy(ref mut rx) => {
+                            match rx.recv().expect("Lazy open thread locked up") {
+                                Ok(new) => {
+                                    *handle = Box::new(Descriptor::Handle(new));
+                                },
+                                Err(x) => {
+                                    *self = Descriptor::Error(x);
+                                    return Err(IoError::from_raw_os_error(x));
+                                }
+                            }
+                        },
+                        _ => {},
+                    }
+                }
+                Ok(self)
             },
             &mut Descriptor::Error(x) => Err(IoError::from_raw_os_error(x)),
             x => Ok(x)

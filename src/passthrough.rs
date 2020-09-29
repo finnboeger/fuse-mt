@@ -152,19 +152,16 @@ impl FilesystemMT for PassthroughFS {
         debug!("getattr: {:?}", path);
 
         if let Some(fh) = fh {
-            match self.file_handles.lock().unwrap().find(fh) {
+            match self.file_handles.lock().unwrap().find(fh, None) {
                 Ok(d) => match d {
-                    Descriptor::Path(_) => match self.stat_real(path) {
-                        Ok(attr) => Ok((TTL, attr)),
-                        Err(_) => Err(libc::ENOENT),
-                    },
+                    Descriptor::Path(_) | Descriptor::File { .. } | Descriptor::Composite { .. } =>
+                        match self.stat_real(path) {
+                            Ok(attr) => Ok((TTL, attr)),
+                            Err(_) => Err(libc::ENOENT),
+                        },
                     Descriptor::Handle(h) => match libc_wrappers::fstat(*h) {
                         Ok(stat) => Ok((TTL, stat_to_fuse(stat))),
                         Err(e) => Err(e),
-                    },
-                    Descriptor::File { path: _, cursor: _ } => match self.stat_real(path) {
-                        Ok(attr) => Ok((TTL, attr)),
-                        Err(_) => Err(libc::ENOENT),
                     },
                     Descriptor::Lazy(_) => unreachable!("Find does not return Descriptor::Lazy"),
                     Descriptor::Error(_) => unreachable!("Find does not return Descriptor::Error"),
@@ -200,14 +197,14 @@ impl FilesystemMT for PassthroughFS {
         debug!("truncate: {:?} to {:#x}", path, size);
 
         let result = if let Some(fd) = fh {
-            match self.file_handles.lock().unwrap().find(fd) {
+            match self.file_handles.lock().unwrap().find(fd, None) {
                 Ok(Descriptor::Handle(h)) => unsafe {
                     libc::ftruncate64(*h as libc::c_int, size as i64)
                 },
                 // TODO: maybe EROFS? How will other files be handled if we return that?
                 Ok(Descriptor::Path(_)) => return Err(libc::EACCES),
                 Err(_) => return Err(libc::ENOENT),
-                Ok(Descriptor::File { path: _, cursor: _ }) => return Err(libc::EACCES),
+                Ok(Descriptor::File { .. }) | Ok(Descriptor::Composite { .. }) => return Err(libc::EACCES),
                 Ok(Descriptor::Lazy(_)) => unreachable!("Find does not return Descriptor::Lazy"),
                 Ok(Descriptor::Error(_)) => unreachable!("Find does not return Descriptor::Error"),
             }
@@ -324,37 +321,40 @@ impl FilesystemMT for PassthroughFS {
 
     fn open(&self, _req: RequestInfo, path: &Path, flags: u32) -> ResultOpen {
         debug!("open: {:?} flags={:#x}", path, flags);
+
+        fn read_file<R: Read>(mut file: R) -> Result<Vec<u8>> {
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)?;
+            Ok(buf)
+        }
+
+        fn real(path: &Path, this: &PassthroughFS) -> Result<OsString, i32> {
+            let real = this.real_path(path);
+            if this.struct_cache.find(path).is_ok() {
+                Ok(real)
+            } else {
+                Err(libc::ENOENT)
+            }
+        }
+
         let mut zip = self.files_cache.lock().unwrap();
         let result = match path_to_rel(path)
             .to_str()
             .map(|x| zip.by_name(x))
             .transpose()
         {
-            Err(_) | Ok(None) => {
-                let real = self.real_path(path);
-                if self.struct_cache.find(path).is_ok() {
-                    Ok((self.file_handles
-                            .lock()
-                            .unwrap()
-                            .register_handle(Descriptor::lazy(real, flags)),
-                        flags
-                    ))
-                } else {
-                    return Err(libc::ENOENT)
-                }
-            }
-            Ok(Some(mut file)) => {
+            Err(_) | Ok(None) =>
+                None,
+            Ok(Some(file)) => {
                 let entry = self.struct_cache.find(path).expect("Cache malformed");
                 let buf = match entry {
                     Entry::File { contents, .. } => contents.clone().unwrap_or_else(|| {
-                        let mut buf = Vec::new();
-                        file.read_to_end(&mut buf)
-                            .expect("Zip cache was forcefully closed?");
+                        let buf = read_file(file).expect("Zip cache was forcefully closed?");
                         ArcBuf::new(buf)
                     }),
                     Entry::Dict { .. } => unreachable!(), 
                 };
-                Ok((
+                Some((
                     self.file_handles
                         .lock()
                         .unwrap()
@@ -366,7 +366,33 @@ impl FilesystemMT for PassthroughFS {
                 ))
             }
         };
-        result
+        
+        match result {
+            None => if let Ok(Some(part)) = path_to_rel(&path.join(".part"))
+                .to_str()
+                .map(|x| zip.by_name(x))
+                .transpose()
+            {
+                let real = real(path, self)?;
+                let buf = read_file(part).expect("Zip cache was forcefully closed?");
+                Ok((
+                    self.file_handles
+                        .lock()
+                        .unwrap()
+                        .register_handle(Descriptor::lazy_composite(real, flags, buf)),
+                    flags,
+                ))
+            } else {
+                let real = real(path, self)?;
+                Ok((self.file_handles
+                        .lock()
+                        .unwrap()
+                        .register_handle(Descriptor::lazy(real, flags)),
+                    flags
+                ))
+            },
+            Some(res) => Ok(res)
+        }
     }
 
     fn read(
@@ -380,53 +406,54 @@ impl FilesystemMT for PassthroughFS {
     ) -> CallbackResult {
         debug!("read: {:?} {:#x} @ {:#x}", path, size, offset);
 
-        // TODO: remove code duplication
-        match self.file_handles.lock().unwrap().find(fh) {
-            Ok(d) => match d {
-                Descriptor::Path(_) => return callback(Err(libc::EISDIR)),
-                Descriptor::Handle(handle) => {
-                    let mut file = unsafe { UnmanagedFile::new(*handle) };
-                    let mut data = Vec::<u8>::with_capacity(size as usize);
-                    unsafe { data.set_len(size as usize) };
+        fn read_data<R: Read + Seek>(file: &mut R, path: &Path, offset: u64, size: u32) -> Result<Vec<u8>, i32> {
+            let mut data = Vec::<u8>::with_capacity(size as usize);
+            unsafe { data.set_len(size as usize) };
 
-                    if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-                        error!("seek({:?}, {}): {}", path, offset, e);
-                        return callback(Err(e.raw_os_error().unwrap()));
-                    }
-                    match file.read(&mut data) {
-                        Ok(n) => {
-                            data.truncate(n);
-                        }
-                        Err(e) => {
-                            error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
-                            return callback(Err(e.raw_os_error().unwrap()));
-                        }
-                    }
-
-                    callback(Ok(&data))
+            if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+                error!("seek({:?}, {}): {}", path, offset, e);
+                return Err(e.raw_os_error().unwrap());
+            }
+            match file.read(&mut data) {
+                Ok(n) => {
+                    data.truncate(n);
                 }
-                Descriptor::File { path: _, cursor } => {
-                    let mut data = Vec::<u8>::with_capacity(size as usize);
-                    unsafe { data.set_len(size as usize) };
+                Err(e) => {
+                    error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
+                    return Err(e.raw_os_error().unwrap());
+                }
+            }
 
-                    if let Err(e) = cursor.seek(SeekFrom::Start(offset)) {
-                        error!("seek({:?}, {}): {}", path, offset, e);
-                        return callback(Err(e.raw_os_error().unwrap()));
-                    }
-                    match cursor.read(&mut data) {
-                        Ok(n) => {
-                            data.truncate(n);
+            Ok(data)
+        }
+            
+        match self.file_handles.lock().unwrap().find(fh, Some(offset + size as u64)) {
+            Ok(d) => {
+                let data = match d {
+                    Descriptor::Path(_) => Err(libc::EISDIR),
+                    Descriptor::Handle(handle) => {
+                        let mut file = unsafe { UnmanagedFile::new(*handle) };
+                        read_data(&mut file, path, offset, size)
+                    },
+                    Descriptor::File { ref mut cursor, .. } => {
+                        read_data(cursor, path, offset, size)
+                    },
+                    Descriptor::Composite { handle, ref mut cursor, .. } => {
+                        if offset + size as u64 > 16_384 {
+                            if let Descriptor::Handle(handle) = **handle {
+                                let mut file = unsafe { UnmanagedFile::new(handle) };
+                                read_data(&mut file, path, offset, size)
+                            } else {
+                                unreachable!("Resolved composite handles are file handles");
+                            }
+                        } else {
+                            read_data(cursor, path, offset, size)
                         }
-                        Err(e) => {
-                            error!("read {:?}, {:#x} @ {:#x}: {}", path, size, offset, e);
-                            return callback(Err(e.raw_os_error().unwrap()));
-                        }
                     }
-
-                    callback(Ok(&data))
-                },
-                Descriptor::Lazy(_) => unreachable!("Find does not return Descriptor::Lazy"),
-                Descriptor::Error(_) => unreachable!("Find does not return Descriptor::Error"),
+                    Descriptor::Lazy(_) => unreachable!("Find does not return Descriptor::Lazy"),
+                    Descriptor::Error(_) => unreachable!("Find does not return Descriptor::Error")
+                };
+                callback(data.as_ref().map(|x| &**x).map_err(|x| *x))
             },
             Err(_) => callback(Err(libc::EBADF)),
         }
@@ -441,7 +468,7 @@ impl FilesystemMT for PassthroughFS {
         data: Vec<u8>,
         _flags: u32,
     ) -> ResultWrite {
-        let handle = match self.file_handles.lock().unwrap().find(fh) {
+        let handle = match self.file_handles.lock().unwrap().find(fh, None) {
             Ok(Descriptor::Handle(h)) => *h,
             _ => return Err(libc::EACCES),
         };
@@ -466,7 +493,7 @@ impl FilesystemMT for PassthroughFS {
     fn flush(&self, _req: RequestInfo, path: &Path, fh: u64, _lock_owner: u64) -> ResultEmpty {
         debug!("flush: {:?}", path);
 
-        let handle = match self.file_handles.lock().unwrap().find(fh) {
+        let handle = match self.file_handles.lock().unwrap().find(fh, None) {
             Ok(Descriptor::Handle(h)) => *h,
             _ => return Ok(()),
         };
@@ -493,9 +520,12 @@ impl FilesystemMT for PassthroughFS {
     ) -> ResultEmpty {
         debug!("release: {:?}", path);
         match self.file_handles.lock().unwrap().free_handle(fh) {
-            Ok(Descriptor::File { path: _, cursor: _ }) => Ok(()),
             Ok(Descriptor::Handle(handle)) => libc_wrappers::close(handle),
-            Ok(Descriptor::Path(_)) | Ok(Descriptor::Lazy(_)) | Ok(Descriptor::Error(_)) => Ok(()),
+            Ok(Descriptor::Composite { handle, .. }) => match *handle {
+                Descriptor::Handle(handle) => libc_wrappers::close(handle),
+                _ => Ok(()),
+            }
+            Ok(Descriptor::File { .. }) | Ok(Descriptor::Path(_)) | Ok(Descriptor::Lazy(_)) | Ok(Descriptor::Error(_)) => Ok(()),
             Err(_) => Err(libc::EBADF),
         }
     }
@@ -503,7 +533,7 @@ impl FilesystemMT for PassthroughFS {
     fn fsync(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
         debug!("fsync: {:?}, data={:?}", path, datasync);
 
-        let handle = match self.file_handles.lock().unwrap().find(fh) {
+        let handle = match self.file_handles.lock().unwrap().find(fh, None) {
             Ok(Descriptor::Handle(h)) => *h,
             _ => return Err(libc::EACCES),
         };
@@ -543,7 +573,7 @@ impl FilesystemMT for PassthroughFS {
         debug!("readdir: {:?}", path);
         let mut entries: Vec<DirectoryEntry> = vec![];
 
-        match self.file_handles.lock().unwrap().find(fh).unwrap() {
+        match self.file_handles.lock().unwrap().find(fh, None).unwrap() {
             Descriptor::Path(s) => {
                 assert_eq!(path, Path::new(&s));
                 match self.struct_cache.find(path) {
@@ -625,7 +655,7 @@ impl FilesystemMT for PassthroughFS {
 
                 Ok(entries)
             }
-            Descriptor::File { path: _, cursor: _ } => Err(libc::ENOTDIR),
+            Descriptor::File { .. } | Descriptor::Composite { .. } => Err(libc::ENOTDIR),
             Descriptor::Lazy(_) => unreachable!("Find does not return Descriptor::Lazy"),
             Descriptor::Error(_) => unreachable!("Find does not return Descriptor::Error"),
         }
@@ -637,7 +667,8 @@ impl FilesystemMT for PassthroughFS {
         match self.file_handles.lock().unwrap().free_handle(fh) {
             Ok(Descriptor::Handle(handle)) => libc_wrappers::closedir(handle),
             Ok(Descriptor::Path(_))
-             | Ok(Descriptor::File { path: _, cursor: _ })
+             | Ok(Descriptor::Composite { .. })
+             | Ok(Descriptor::File { .. })
              | Ok(Descriptor::Lazy(_))
              | Ok(Descriptor::Error(_)) => Ok(()),
             Err(_) => Err(libc::EBADF),
@@ -647,7 +678,7 @@ impl FilesystemMT for PassthroughFS {
     fn fsyncdir(&self, _req: RequestInfo, path: &Path, fh: u64, datasync: bool) -> ResultEmpty {
         debug!("fsyncdir: {:?} (datasync = {:?})", path, datasync);
 
-        let handle = match self.file_handles.lock().unwrap().find(fh) {
+        let handle = match self.file_handles.lock().unwrap().find(fh, None) {
             Ok(Descriptor::Handle(h)) => *h,
             _ => return Err(libc::EACCES),
         };
