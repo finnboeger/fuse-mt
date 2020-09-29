@@ -11,6 +11,7 @@ use std::ffi::{OsString, OsStr};
 use std::fs::File;
 use std::io::copy;
 use std::path::Path;
+use ultrastar_txt::structs::Source;
 use walkdir::WalkDir;
 #[cfg(feature = "mount")]
 use zip::ZipArchive;
@@ -202,9 +203,9 @@ impl Entry {
 fn add_txt_to_cache(
     p: &Path,
     zip: &mut zip::ZipWriter<File>,
-    options: &zip::write::FileOptions,
+    options: zip::write::FileOptions,
 ) -> Result<()> {
-    zip.start_file_from_path(p, *options)
+    zip.start_file(p.to_string_lossy().to_owned(), options)
         .context("Failed to start zip file")?;
     let mut file = File::open(p)?;
     copy(&mut file, zip).context("Failed to copy into cache")?;
@@ -214,13 +215,13 @@ fn add_txt_to_cache(
 fn add_audio_to_cache(
     p: &Path,
     zip: &mut zip::ZipWriter<File>,
-    options: &zip::write::FileOptions,
+    options: zip::write::FileOptions,
 ) -> Result<()> {
     use std::io::{Read, Write};
 
     let extension = p.extension().expect("Extension is tested previously")
         .to_str().expect("Extension was tested against utf8-strings previously");
-    zip.start_file_from_path(&p.with_extension(&format!("{}.part", extension)), *options)?;
+    zip.start_file(p.with_extension(&format!("{}.part", extension)).to_string_lossy().to_owned(), options)?;
     let mut file = File::open(p)?;
     let mut counter = 0;
     while counter < 16_384 {
@@ -243,7 +244,7 @@ fn add_to_coverdb(p: &Path, cover_db: &mut CoverDB) -> Result<()> {
     // ultrastar-txt's errors are not Sync, which anyhow needs
     let txt = ultrastar_txt::parse_txt_song(p)
         .map_err(|err| anyhow!("Unable to parse song file: {}", err))?;
-    if let Some(cover_path) = txt.header.cover_path {
+    if let Some(Source::Local(cover_path)) = txt.header.cover_path {
         cover_db
             .add(&cover_path)
             .with_context(|| format!("Failed to load cover '{}' into db", cover_path.display()))?;
@@ -316,7 +317,7 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(
 
         if p.extension().map_or(false, |x| x == "txt") {
             // Add to cache if it is a .txt-file
-            if let Err(err) = add_txt_to_cache(p, &mut zip, &options) {
+            if let Err(err) = add_txt_to_cache(p, &mut zip, options) {
                 pb.println(format!("[WARN] Unable to cache '{}': {}", p.display(), err));
                 continue;
             }
@@ -338,7 +339,7 @@ pub fn build<P1: AsRef<Path>, P2: AsRef<Path>>(
         if cache_audio && p.extension().map_or(false,
             |x| x == "mp3" || x == "m4a" || x == "ogg" || x == "wav" || x == "wma" || x == "flac"
         ) {
-            if let Err(err) = add_audio_to_cache(p, &mut zip, &options) {
+            if let Err(err) = add_audio_to_cache(p, &mut zip, options) {
                 pb.println(format!(
                     "[WARN] Unable to add music header for '{}': {}",
                     p.display(),
